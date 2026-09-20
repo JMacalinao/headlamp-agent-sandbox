@@ -12,6 +12,9 @@
       matchManagers: ['npm', 'github-actions'],
       matchUpdateTypes: ['minor', 'patch'],
       automerge: true,
+      // The release job runs on the automerge commit with no human in the loop; this delay is
+      // the only window in which a poisoned publish gets noticed.
+      minimumReleaseAge: '7 days',
     },
     {
       matchManagers: ['npm', 'github-actions'],

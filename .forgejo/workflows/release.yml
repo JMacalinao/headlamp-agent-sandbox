@@ -34,7 +34,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - run: npm ci
+      # Lifecycle scripts run as root in the same container that later holds the registry token.
+      - run: npm ci --ignore-scripts
       - run: npm run lint
       - run: npm run test:unit
       - run: npm run build
@@ -68,12 +69,13 @@ jobs:
           set -eu
           docker build -t "${{ steps.tag.outputs.ref }}" .
 
-      # The image is inert — no entrypoint, no service — so the only thing worth
-      # proving is that Headlamp's plugin pair is where -plugins-dir expects it.
+      # The image is inert — no entrypoint, no service — so the only thing worth proving is
+      # that Headlamp's plugin pair is where -plugins-dir expects it, readable as the uid the
+      # consuming initContainer runs as.
       - name: Smoke test image
         run: |
           set -eu
-          docker run --rm --network none --entrypoint /bin/sh \
+          docker run --rm --network none --user 100:101 --entrypoint /bin/sh \
             "${{ steps.tag.outputs.ref }}" -c \
             'test -s /plugin/headlamp-agent-sandbox/main.js &&
              test -s /plugin/headlamp-agent-sandbox/package.json'

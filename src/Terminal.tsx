@@ -43,6 +43,27 @@ import { AgentLauncher, AGENTS } from './sandbox';
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
+const KEYS: { label: string; bytes: string }[] = [
+  { label: 'Esc', bytes: '\x1b' },
+  { label: 'Tab', bytes: '\t' },
+  { label: 'Ctrl-C', bytes: '\x03' },
+  { label: 'Ctrl-D', bytes: '\x04' },
+  { label: 'Ctrl-Z', bytes: '\x1a' },
+  { label: 'Ctrl-B', bytes: '\x02' },
+  { label: '↑', bytes: '\x1b[A' },
+  { label: '↓', bytes: '\x1b[B' },
+  { label: '←', bytes: '\x1b[D' },
+  { label: '→', bytes: '\x1b[C' },
+  { label: 'Home', bytes: '\x1b[H' },
+  { label: 'End', bytes: '\x1b[F' },
+];
+
+// Canceling pointerdown keeps the terminal focused, so a tap does not close the phone keyboard.
+// touchstart is the wrong event for this: canceling it also suppresses the click.
+function keepFocus(event: React.SyntheticEvent): void {
+  event.preventDefault();
+}
+
 type ExecStream = { cancel: () => void; getSocket: () => WebSocket | null };
 
 interface ExecResult {
@@ -183,6 +204,7 @@ interface TerminalPaneProps {
   run: string | undefined;
   workspace: string;
   visible: boolean;
+  fullscreen: boolean;
 }
 
 function TerminalPane({
@@ -192,6 +214,7 @@ function TerminalPane({
   run,
   workspace,
   visible,
+  fullscreen,
 }: TerminalPaneProps): React.ReactNode {
   const holderRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
@@ -200,6 +223,9 @@ function TerminalPane({
   const uploadStreamRef = useRef<ExecStream | null>(null);
   const disposedRef = useRef(false);
   const pendingRef = useRef<Uint8Array[]>([]);
+  const ctrlArmedRef = useRef(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [ctrlArmed, setCtrlArmed] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [upload, setUpload] = useState<{ name: string; sent: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -212,6 +238,24 @@ function TerminalPane({
       pendingRef.current.push(bytes);
     }
   }, []);
+
+  const armCtrl = useCallback((armed: boolean): void => {
+    ctrlArmedRef.current = armed;
+    setCtrlArmed(armed);
+  }, []);
+
+  // onData is registered once at mount, so the armed flag has to be read from the ref.
+  const sendKey = useCallback(
+    (data: string): void => {
+      if (ctrlArmedRef.current && data.length === 1 && data >= ' ' && data <= '~') {
+        armCtrl(false);
+        send(frameText(CH_STDIN, String.fromCharCode(data.toUpperCase().charCodeAt(0) & 0x1f)));
+        return;
+      }
+      send(frameText(CH_STDIN, data));
+    },
+    [send, armCtrl]
+  );
 
   useEffect(() => {
     const holder = holderRef.current;
@@ -245,7 +289,7 @@ function TerminalPane({
         }
       },
       {
-        command: attachCommand(session, run),
+        command: attachCommand(session),
         tty: true,
         stdin: true,
         stdout: true,
@@ -268,10 +312,15 @@ function TerminalPane({
         fit.fit();
       }
       socket.send(frameResize(term.cols, term.rows));
+      // Typed into the shell rather than passed to tmux: tmux would exec the binary and skip the
+      // image's rc, where `claude` is a function supplying the unique socket path it needs.
+      if (run !== undefined) {
+        socket.send(frameText(CH_STDIN, `${run}\n`));
+      }
       pendingRef.current.splice(0).forEach(bytes => socket.send(bytes));
     })();
 
-    const typing = term.onData(data => send(frameText(CH_STDIN, data)));
+    const typing = term.onData(sendKey);
     const observer = new ResizeObserver(() => {
       if (!holder.offsetParent) {
         return;
@@ -294,7 +343,7 @@ function TerminalPane({
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [pod, container, session, run, send]);
+  }, [pod, container, session, run, send, sendKey]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -304,7 +353,8 @@ function TerminalPane({
     fitRef.current?.fit();
     send(frameResize(term.cols, term.rows));
     term.focus();
-  }, [visible, send]);
+    // fullscreen resizes the pane; without a refit the remote pty keeps the old dimensions.
+  }, [visible, fullscreen, send]);
 
   const handleFiles = useCallback(
     async (files: File[]): Promise<void> => {
@@ -411,6 +461,68 @@ function TerminalPane({
         </Box>
       )}
       <Box ref={holderRef} sx={{ flexGrow: 1, minHeight: 320, overflow: 'hidden' }} />
+      <Box
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 0.5,
+          p: 0.5,
+          overflowX: 'auto',
+          borderTop: 1,
+          borderColor: 'divider',
+        }}
+      >
+        <Button
+          size="small"
+          variant={ctrlArmed ? 'contained' : 'outlined'}
+          aria-pressed={ctrlArmed}
+          sx={{ minWidth: 40, px: 1 }}
+          onPointerDown={keepFocus}
+          onMouseDown={keepFocus}
+          onClick={() => armCtrl(!ctrlArmed)}
+        >
+          Ctrl
+        </Button>
+        {KEYS.map(key => (
+          <Button
+            key={key.label}
+            size="small"
+            variant="outlined"
+            sx={{ minWidth: 40, px: 1 }}
+            onPointerDown={keepFocus}
+            onMouseDown={keepFocus}
+            onClick={() => sendKey(key.bytes)}
+          >
+            {key.label}
+          </Button>
+        ))}
+        <Button
+          size="small"
+          variant="outlined"
+          sx={{ minWidth: 40, px: 1 }}
+          startIcon={<Icon icon="mdi:paperclip" />}
+          onPointerDown={keepFocus}
+          onMouseDown={keepFocus}
+          onClick={() => fileRef.current?.click()}
+        >
+          Upload
+        </Button>
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          hidden
+          aria-label="Choose files to upload"
+          onChange={event => {
+            const files = Array.from(event.target.files ?? []);
+            // Clearing it is what lets the same file be picked twice in a row.
+            event.target.value = '';
+            if (files.length > 0) {
+              void handleFiles(files);
+            }
+          }}
+        />
+      </Box>
       {dragging && (
         <Box
           sx={{
@@ -451,6 +563,7 @@ export function SandboxTerminal({
   const [menu, setMenu] = useState<{ anchor: HTMLElement; session: string } | null>(null);
   const [killing, setKilling] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -505,7 +618,21 @@ export function SandboxTerminal({
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: 560 }}>
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        ...(fullscreen
+          ? {
+              position: 'fixed',
+              inset: 0,
+              zIndex: theme => theme.zIndex.modal,
+              bgcolor: 'background.paper',
+              overflow: 'hidden',
+            }
+          : { height: 560 }),
+      }}
+    >
       {listError && <Alert severity="warning">{listError}</Alert>}
       <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
         <Tabs
@@ -557,6 +684,13 @@ export function SandboxTerminal({
           onClick={event => setAddAnchor(event.currentTarget)}
         >
           New session
+        </Button>
+        <Button
+          size="small"
+          startIcon={<Icon icon={fullscreen ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'} />}
+          onClick={() => setFullscreen(current => !current)}
+        >
+          {fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
         </Button>
       </Box>
 
@@ -612,6 +746,7 @@ export function SandboxTerminal({
             run={commands[session]}
             workspace={workspace}
             visible={session === active}
+            fullscreen={fullscreen}
           />
         ))
       )}

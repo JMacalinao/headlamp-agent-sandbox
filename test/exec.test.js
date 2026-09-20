@@ -180,20 +180,11 @@ test('LIST_SESSIONS_COMMAND swallows the no-server-running failure', () => {
   ]);
 });
 
-test('attachCommand without run attaches unchanged', () => {
+// The agent is typed into the session's shell, never passed here: tmux would exec the binary and
+// skip the image's rc, where `claude` is a shell function that gives it a unique socket path.
+test('attachCommand always opens a bare session', () => {
   assert.deepEqual(attachCommand('mysession'), ['tmux', '-u', 'new', '-A', '-s', 'mysession']);
-});
-
-test('attachCommand with run starts a program in a new session', () => {
-  assert.deepEqual(attachCommand('mysession', 'htop'), [
-    'tmux',
-    '-u',
-    'new',
-    '-A',
-    '-s',
-    'mysession',
-    'htop',
-  ]);
+  assert.equal(attachCommand('mysession').length, 6);
 });
 
 test('killSessionCommand', () => {

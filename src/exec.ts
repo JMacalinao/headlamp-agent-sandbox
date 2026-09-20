@@ -100,10 +100,8 @@ export const LIST_SESSIONS_COMMAND: string[] = [
 ];
 
 // -u: a client whose LC_CTYPE is not UTF-8 makes tmux draw every wide glyph as `_`.
-export function attachCommand(session: string, run?: string): string[] {
-  return run
-    ? ['tmux', '-u', 'new', '-A', '-s', session, run]
-    : ['tmux', '-u', 'new', '-A', '-s', session];
+export function attachCommand(session: string): string[] {
+  return ['tmux', '-u', 'new', '-A', '-s', session];
 }
 
 export function killSessionCommand(session: string): string[] {

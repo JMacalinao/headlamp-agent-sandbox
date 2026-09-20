@@ -20,6 +20,19 @@ you can run more than one thing in a sandbox at once.
 The terminal also accepts dropped files and pasted screenshots, which get
 uploaded into the sandbox and typed into the agent's prompt as a path.
 
+Because a phone is a first-class way to drive this, each terminal carries a row
+of keys a touch keyboard does not have — `Esc`, `Tab`, `Ctrl-C`, the arrows,
+`Home`/`End`, tmux's `Ctrl-B` prefix — plus a sticky `Ctrl` that applies to the
+next key you press, a button that expands the terminal to fill the viewport, and
+an upload button for the case where pasting a file is not practical. Tapping any
+of them leaves the terminal focused, so the on-screen keyboard stays up.
+
+Launching an agent types its name into the session's shell rather than handing it
+to `tmux` as the session's command. That means the shell's own startup files
+apply — several agents are wrapped in shell functions that pass per-instance
+flags — and when the agent exits you are left at a prompt instead of watching the
+session disappear.
+
 ## How the upload works
 
 When you drop a file or paste a screenshot onto a terminal, the plugin does

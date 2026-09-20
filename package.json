@@ -1,7 +1,10 @@
 {
   "name": "headlamp-agent-sandbox",
   "version": "0.1.0",
-  "description": "Your Headlamp plugin",
+  "description": "Headlamp plugin for kubernetes-sigs/agent-sandbox: manage Sandbox resources and open multiple tmux terminals per sandbox.",
+  "license": "Apache-2.0",
+  "homepage": "https://git.macalinao.org/jj/headlamp-agent-sandbox",
+  "repository": "https://git.macalinao.org/jj/headlamp-agent-sandbox",
   "scripts": {
     "start": "headlamp-plugin start",
     "build": "headlamp-plugin build",
@@ -13,6 +16,7 @@
     "storybook": "headlamp-plugin storybook",
     "storybook-build": "headlamp-plugin storybook-build",
     "test": "headlamp-plugin test",
+    "test:unit": "node --test 'test/*.test.js'",
     "i18n": "headlamp-plugin i18n"
   },
   "keywords": [
@@ -21,7 +25,10 @@
     "kubernetes",
     "kubernetes-ui",
     "kubernetes-debugging",
-    "plugins"
+    "plugins",
+    "agent-sandbox",
+    "tmux",
+    "terminal"
   ],
   "prettier": "@headlamp-k8s/eslint-config/prettier-config",
   "eslintConfig": {

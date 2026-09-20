@@ -50,17 +50,56 @@ interface ExecResult {
   error: string | null;
 }
 
+interface RunExecOptions {
+  input?: { chunks: string[]; onProgress: (sent: number) => void };
+  /** Checked at every await, so a disposed caller stops the transfer. */
+  isCancelled?: () => boolean;
+  onStream?: (stream: ExecStream) => void;
+}
+
+function parseSessions(stdout: string): string[] {
+  return stdout
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+}
+
+// connectCb means "about to connect": it runs before pod.exec() has even returned, and the
+// socket only exists once the connection promise resolves. Waiting for it is the only way in.
+async function waitForOpenSocket(
+  stream: ExecStream,
+  isCancelled: () => boolean
+): Promise<WebSocket | null> {
+  let socket = stream.getSocket();
+  while (!socket) {
+    if (isCancelled()) {
+      return null;
+    }
+    await new Promise(wake => setTimeout(wake, 20));
+    socket = stream.getSocket();
+  }
+  if (socket.readyState === WebSocket.CONNECTING) {
+    const connecting = socket;
+    await new Promise<void>(resolve => {
+      connecting.addEventListener('open', () => resolve(), { once: true });
+      connecting.addEventListener('close', () => resolve(), { once: true });
+    });
+  }
+  return !isCancelled() && socket.readyState === WebSocket.OPEN ? socket : null;
+}
+
 /** Runs one non-interactive command to completion, optionally streaming base64 chunks to its stdin. */
 function runExec(
   pod: Pod,
   container: string,
   command: string[],
-  input?: { chunks: string[]; onProgress: (sent: number) => void }
+  options: RunExecOptions = {}
 ): Promise<ExecResult> {
   return new Promise<ExecResult>(resolve => {
-    const decoder = new TextDecoder();
-    let stdout = '';
+    const output: Uint8Array[] = [];
     let settled = false;
+
+    const cancelled = (): boolean => settled || options.isCancelled?.() === true;
 
     const finish = (error: string | null): void => {
       if (settled) {
@@ -68,7 +107,15 @@ function runExec(
       }
       settled = true;
       stream.cancel();
-      resolve({ stdout, error });
+      // Channels 1 and 2 interleave, so one streaming decoder would splice a held multi-byte
+      // prefix from stdout onto a stderr payload; decode the whole thing once instead.
+      const joined = new Uint8Array(output.reduce((total, part) => total + part.length, 0));
+      let offset = 0;
+      for (const part of output) {
+        joined.set(part, offset);
+        offset += part.length;
+      }
+      resolve({ stdout: new TextDecoder().decode(joined), error });
     };
 
     const stream: ExecStream = pod.exec(
@@ -76,7 +123,7 @@ function runExec(
       (data: any) => {
         const { channel, payload } = unframe(data as ArrayBuffer);
         if (channel === CH_STDOUT || channel === CH_STDERR) {
-          stdout += decoder.decode(payload, { stream: true });
+          output.push(payload);
         } else if (channel === CH_ERROR) {
           const status = parseStatus(payload);
           finish(status && !status.success ? status.message || 'the command failed' : null);
@@ -85,28 +132,38 @@ function runExec(
       {
         command,
         tty: false,
-        stdin: !!input,
+        stdin: !!options.input,
         stdout: true,
         stderr: true,
         reconnectOnFailure: false,
-        connectCb: () => {
-          const socket = stream.getSocket();
-          if (!input || !socket) {
-            return;
-          }
-          void (async () => {
-            for (const [index, chunk] of input.chunks.entries()) {
-              socket.send(frameText(CH_STDIN, chunk));
-              input.onProgress(index + 1);
-              while (socket.bufferedAmount > 1024 * 1024) {
-                await new Promise(wake => setTimeout(wake, 20));
-              }
-            }
-          })();
-        },
         failCb: () => finish('the connection closed before the command finished'),
       }
     );
+    options.onStream?.(stream);
+
+    const input = options.input;
+    if (input) {
+      void (async () => {
+        const socket = await waitForOpenSocket(stream, cancelled);
+        if (!socket) {
+          return;
+        }
+        for (const [index, chunk] of input.chunks.entries()) {
+          if (cancelled() || socket.readyState !== WebSocket.OPEN) {
+            return;
+          }
+          socket.send(frameText(CH_STDIN, chunk));
+          input.onProgress(index + 1);
+          // send() on a closing socket grows bufferedAmount and it never drains again.
+          while (socket.bufferedAmount > 1024 * 1024) {
+            if (cancelled() || socket.readyState !== WebSocket.OPEN) {
+              return;
+            }
+            await new Promise(wake => setTimeout(wake, 20));
+          }
+        }
+      })();
+    }
   });
 }
 
@@ -140,6 +197,8 @@ function TerminalPane({
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const streamRef = useRef<ExecStream | null>(null);
+  const uploadStreamRef = useRef<ExecStream | null>(null);
+  const disposedRef = useRef(false);
   const pendingRef = useRef<Uint8Array[]>([]);
   const [dragging, setDragging] = useState(false);
   const [upload, setUpload] = useState<{ name: string; sent: number; total: number } | null>(null);
@@ -159,6 +218,9 @@ function TerminalPane({
     if (!holder) {
       return undefined;
     }
+
+    disposedRef.current = false;
+    let cancelled = false;
 
     const term = new XTerm({ fontSize: 13, cursorBlink: true, scrollback: 10000 });
     const fit = new FitAddon();
@@ -189,21 +251,25 @@ function TerminalPane({
         stdout: true,
         stderr: true,
         reconnectOnFailure: false,
-        connectCb: () => {
-          const socket = stream.getSocket();
-          if (!socket) {
-            return;
-          }
-          if (holder.offsetParent) {
-            fit.fit();
-          }
-          socket.send(frameResize(term.cols, term.rows));
-          pendingRef.current.splice(0).forEach(bytes => socket.send(bytes));
+        failCb: () => {
+          cancelled = true;
+          term.write('\r\n\x1b[31mConnection closed.\x1b[0m\r\n');
         },
-        failCb: () => term.write('\r\n\x1b[31mConnection closed.\x1b[0m\r\n'),
       }
     );
     streamRef.current = stream;
+
+    void (async () => {
+      const socket = await waitForOpenSocket(stream, () => cancelled);
+      if (!socket) {
+        return;
+      }
+      if (holder.offsetParent) {
+        fit.fit();
+      }
+      socket.send(frameResize(term.cols, term.rows));
+      pendingRef.current.splice(0).forEach(bytes => socket.send(bytes));
+    })();
 
     const typing = term.onData(data => send(frameText(CH_STDIN, data)));
     const observer = new ResizeObserver(() => {
@@ -216,9 +282,13 @@ function TerminalPane({
     observer.observe(holder);
 
     return () => {
+      disposedRef.current = true;
+      cancelled = true;
       observer.disconnect();
       typing.dispose();
       stream.cancel();
+      uploadStreamRef.current?.cancel();
+      uploadStreamRef.current = null;
       term.dispose();
       streamRef.current = null;
       termRef.current = null;
@@ -239,6 +309,9 @@ function TerminalPane({
   const handleFiles = useCallback(
     async (files: File[]): Promise<void> => {
       for (const file of files) {
+        if (disposedRef.current) {
+          return;
+        }
         if (file.size > MAX_UPLOAD_BYTES) {
           setError(
             `${file.name} is ${(file.size / 1024 / 1024).toFixed(1)} MiB; the limit is 10 MiB.`
@@ -250,8 +323,13 @@ function TerminalPane({
         try {
           encoded = await readBase64(file);
         } catch (err) {
-          setError(`Could not read ${file.name}: ${(err as Error).message}`);
+          if (!disposedRef.current) {
+            setError(`Could not read ${file.name}: ${(err as Error).message}`);
+          }
           continue;
+        }
+        if (disposedRef.current) {
+          return;
         }
 
         const directory = `${workspace}/.attachments`;
@@ -265,10 +343,20 @@ function TerminalPane({
           container,
           uploadCommand(directory, path, encoded.length),
           {
-            chunks,
-            onProgress: sent => setUpload(current => (current ? { ...current, sent } : current)),
+            input: {
+              chunks,
+              onProgress: sent => setUpload(current => (current ? { ...current, sent } : current)),
+            },
+            isCancelled: () => disposedRef.current,
+            onStream: stream => {
+              uploadStreamRef.current = stream;
+            },
           }
         );
+        uploadStreamRef.current = null;
+        if (disposedRef.current) {
+          return;
+        }
         setUpload(null);
 
         if (result.error) {
@@ -316,7 +404,10 @@ function TerminalPane({
       {upload && (
         <Box sx={{ px: 1, py: 0.5 }}>
           <Typography variant="caption">Uploading {upload.name}</Typography>
-          <LinearProgress variant="determinate" value={(upload.sent / upload.total) * 100} />
+          <LinearProgress
+            variant="determinate"
+            value={upload.total > 0 ? (upload.sent / upload.total) * 100 : 100}
+          />
         </Box>
       )}
       <Box ref={holderRef} sx={{ flexGrow: 1, minHeight: 320, overflow: 'hidden' }} />
@@ -367,10 +458,7 @@ export function SandboxTerminal({
       if (cancelled) {
         return;
       }
-      const names = result.stdout
-        .split('\n')
-        .map(line => line.trim())
-        .filter(Boolean);
+      const names = parseSessions(result.stdout);
       setSessions(names);
       setActive(names[0] ?? '');
       setListError(result.error);
@@ -388,16 +476,21 @@ export function SandboxTerminal({
     }
   }
 
-  function openSession(agent: AgentLauncher): void {
-    const existing = sessions ?? [];
+  // `tmux new -A` silently attaches and drops the command argument if the name is taken, so the
+  // name has to be chosen against what the pod has right now, not against the mount-time list.
+  async function openSession(agent: AgentLauncher): Promise<void> {
+    setAddAnchor(null);
+    const local = sessions ?? [];
+    const result = await runExec(pod, container, LIST_SESSIONS_COMMAND);
+    setListError(result.error);
+    const taken = new Set([...local, ...(result.error ? [] : parseSessions(result.stdout))]);
     let name = agent.id;
-    for (let suffix = 2; existing.includes(name); suffix++) {
+    for (let suffix = 2; taken.has(name); suffix++) {
       name = `${agent.id}-${suffix}`;
     }
-    setSessions([...existing, name]);
+    setSessions([...local, name]);
     setCommands(current => ({ ...current, [name]: agent.command }));
     setActive(name);
-    setAddAnchor(null);
   }
 
   async function killSession(session: string): Promise<void> {
@@ -469,7 +562,7 @@ export function SandboxTerminal({
 
       <Menu anchorEl={addAnchor} open={!!addAnchor} onClose={() => setAddAnchor(null)}>
         {AGENTS.map(agent => (
-          <MenuItem key={agent.id} onClick={() => openSession(agent)}>
+          <MenuItem key={agent.id} onClick={() => void openSession(agent)}>
             {agent.label}
           </MenuItem>
         ))}

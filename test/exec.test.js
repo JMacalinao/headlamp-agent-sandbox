@@ -22,7 +22,9 @@ import {
 test('frame/unframe round-trip with a 0 byte and multi-byte UTF-8', () => {
   const payload = new TextEncoder().encode('a\u0000b\u00e9\u4e2d');
   const framed = frame(CH_STDOUT, payload);
-  const { channel, payload: out } = unframe(framed.buffer.slice(framed.byteOffset, framed.byteOffset + framed.byteLength));
+  const { channel, payload: out } = unframe(
+    framed.buffer.slice(framed.byteOffset, framed.byteOffset + framed.byteLength)
+  );
   assert.equal(channel, CH_STDOUT);
   assert.deepEqual(out, payload);
 });
@@ -91,14 +93,51 @@ test('shQuote handles an embedded single quote', () => {
   assert.equal(quoted, `'it'\\''s a test'`);
 });
 
-test('uploadCommand quotes dir/file with a space and a quote', () => {
-  const argv = uploadCommand(`/tmp/up loads`, `it's.txt`, 42);
+// Undo shQuote so the script can be read back as the operands it will actually pass.
+function unquote(token) {
+  return token.replaceAll(`'\\''`, '\u0000').replaceAll(`'`, '').replaceAll('\u0000', `'`);
+}
+
+function words(stage) {
+  return stage.trim().split(/\s+/).map(unquote);
+}
+
+test('uploadCommand creates the directory, reads the exact byte count and moves into place', () => {
+  const dir = '/workspace/.attachments';
+  const path = `${dir}/20260920-134501-a.png`;
+  const argv = uploadCommand(dir, path, 0);
   assert.equal(argv[0], 'sh');
   assert.equal(argv[1], '-c');
-  const script = argv[2];
-  assert.match(script, /mkdir -p '\/tmp\/up loads'/);
-  assert.match(script, /head -c 42 \| base64 -d > 'it'\\''s\.txt'\.part/);
-  assert.match(script, /mv 'it'\\''s\.txt'\.part 'it'\\''s\.txt'/);
+
+  const [transfer, ...cleanup] = argv[2].split(';');
+  const stages = transfer.split('&&');
+  assert.equal(stages.length, 5);
+  assert.deepEqual(words(stages[0]), ['mkdir', '-p', dir]);
+  assert.deepEqual(words(stages[1]), ['head', '-c', '0', '>', `${path}.b64`]);
+  // head -c exits 0 on a short read, so this is the check that rejects a truncated transfer.
+  assert.deepEqual(words(stages[2]), ['[', `"$(wc`, '-c', '<', `${path}.b64)"`, '-eq', '0', ']']);
+  assert.deepEqual(words(stages[3]), ['base64', '-d', '<', `${path}.b64`, '>', `${path}.part`]);
+  assert.deepEqual(words(stages[4]), ['mv', `${path}.part`, path]);
+
+  assert.deepEqual(words(cleanup[0]), ['status=$?']);
+  assert.deepEqual(words(cleanup[1]), ['rm', '-f', `${path}.b64`, `${path}.part`]);
+  assert.deepEqual(words(cleanup[2]), ['exit', '$status']);
+});
+
+test('uploadCommand derives the temporary paths from the quoted file', () => {
+  const dir = `/tmp/up loads`;
+  const file = `${dir}/it's.txt`;
+  const script = uploadCommand(dir, file, 42)[2];
+  for (const suffix of ['.b64', '.part']) {
+    // The suffix must sit outside the quotes, or the shell would read it as part of the name.
+    assert.ok(script.includes(`${shQuote(file)}${suffix}`));
+    assert.ok(!script.includes(shQuote(`${file}${suffix}`)));
+  }
+});
+
+test('base64 is one byte per character, which is what makes head -c <b64len> exact', () => {
+  const b64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+  assert.equal(new TextEncoder().encode(b64).length, b64.length);
 });
 
 test('attachmentName strips directory parts', () => {
@@ -117,6 +156,12 @@ test('attachmentName keeps the extension when truncating a long name', () => {
   const result = attachmentName(long, now);
   assert.ok(result.endsWith('.txt'));
   assert.ok(result.length <= 'YYYYMMDD-HHMMSS-'.length + 100);
+});
+
+test('attachmentName does not grow a name whose extension is absurdly long', () => {
+  const now = new Date('2026-09-20T13:45:01.000Z');
+  const result = attachmentName('a.' + 'b'.repeat(150), now);
+  assert.ok(result.length <= 116, `got ${result.length} characters`);
 });
 
 test('attachmentName is deterministic for a fixed now and never empty', () => {

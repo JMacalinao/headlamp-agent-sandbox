@@ -64,7 +64,8 @@ export function attachmentName(original: string, now: Date = new Date()): string
   }
   if (safe.length > 100) {
     const dot = safe.lastIndexOf('.');
-    const ext = dot > 0 ? safe.slice(dot) : '';
+    // A long trailing dot-run is not an extension; slicing by its length would grow the name.
+    const ext = dot > 0 && safe.length - dot <= 16 ? safe.slice(dot) : '';
     safe = safe.slice(0, 100 - ext.length) + ext;
   }
   const ts = now
@@ -75,16 +76,20 @@ export function attachmentName(original: string, now: Date = new Date()): string
   return `${ts}-${safe}`;
 }
 
-// head -c makes the exec terminate itself on the exact byte count; we can't rely on
-// closing the socket to signal EOF over the exec protocol. .part+mv keeps a truncated
-// transfer from landing at the final path.
+// head -c both terminates the exec on the exact byte count (the protocol gives us no EOF)
+// and exits 0 on a short read, and base64 -d accepts any multiple of 4 — so the wc -c check
+// is the only thing that catches a transfer cut at a chunk boundary. The intermediates are
+// removed on every path and the failing status preserved.
 export function uploadCommand(dir: string, file: string, b64len: number): string[] {
   const q = shQuote(dir);
   const qf = shQuote(file);
   return [
     'sh',
     '-c',
-    `mkdir -p ${q} && head -c ${b64len} | base64 -d > ${qf}.part && mv ${qf}.part ${qf}`,
+    `mkdir -p ${q} && head -c ${b64len} > ${qf}.b64 && ` +
+      `[ "$(wc -c < ${qf}.b64)" -eq ${b64len} ] && ` +
+      `base64 -d < ${qf}.b64 > ${qf}.part && mv ${qf}.part ${qf}; ` +
+      `status=$?; rm -f ${qf}.b64 ${qf}.part; exit $status`,
   ];
 }
 

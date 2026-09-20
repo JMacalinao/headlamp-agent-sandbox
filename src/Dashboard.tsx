@@ -269,7 +269,6 @@ function DeleteSandboxDialog({
 }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const deletesVolume = sandbox?.jsonData?.spec?.shutdownPolicy === 'Delete';
 
   async function submit(): Promise<void> {
     if (!sandbox) {
@@ -293,10 +292,9 @@ function DeleteSandboxDialog({
       <DialogContent>
         {error && <Alert severity="error">{error}</Alert>}
         <DialogContentText>
-          {deletesVolume
-            ? 'The shutdown policy is Delete, so the controller also deletes the workspace ' +
-              'PersistentVolumeClaim. Everything stored in the workspace is lost and cannot be recovered.'
-            : 'The sandbox and its pod are deleted. The workspace PersistentVolumeClaim is kept.'}
+          The controller owns the workspace PersistentVolumeClaim, so deleting the sandbox deletes
+          the volume too, whatever the shutdown policy says. Everything stored in the workspace is
+          lost and cannot be recovered.
         </DialogContentText>
       </DialogContent>
       <DialogActions>
@@ -317,6 +315,8 @@ export function SandboxDetail(): ReactNode {
   const [pod, setPod] = useState<Pod | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  const selector: string | undefined = sandbox?.jsonData?.status?.selector;
 
   useEffect(() => {
     if (!sandbox) {
@@ -340,7 +340,8 @@ export function SandboxDetail(): ReactNode {
     return () => {
       cancelled = true;
     };
-  }, [sandbox, namespace]);
+    // Deliberately not [sandbox]: a watch event replaces that object on every status heartbeat.
+  }, [selector, namespace]);
 
   if (error) {
     return (

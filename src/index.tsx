@@ -14,19 +14,68 @@
  * limitations under the License.
  */
 
-import { registerAppBarAction } from '@kinvolk/headlamp-plugin/lib';
+import {
+  type PluginSettingsDetailsProps,
+  registerPluginSettings,
+  registerRoute,
+  registerSidebarEntry,
+} from '@kinvolk/headlamp-plugin/lib';
+import { Stack, TextField } from '@mui/material';
+import { type ReactNode } from 'react';
+import { SandboxDetail, SandboxList } from './Dashboard';
+import { DEFAULT_CONFIG, PLUGIN_NAME } from './sandbox';
 
-// Below are some imports you may want to use.
-//   See README.md for links to plugin development documentation.
-// import { Headlamp, K8s, useTranslation } from '@kinvolk/headlamp-plugin/lib';
-// import { SectionBox } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
-// import { K8s } from '@kinvolk/headlamp-plugin/lib/K8s';
-// import { Typography } from '@mui/material';
+registerSidebarEntry({
+  parent: null,
+  name: 'sandboxes',
+  label: 'Sandboxes',
+  url: '/agent-sandbox',
+  icon: 'mdi:robot-outline',
+});
 
-registerAppBarAction(<span>Hello</span>);
+registerSidebarEntry({
+  parent: 'sandboxes',
+  name: 'sandbox-list',
+  label: 'Sandboxes',
+  url: '/agent-sandbox',
+});
 
-// Example of using i18n (internationalization):
-// function MyComponent() {
-//   const { t } = useTranslation();
-//   return <div>{t('translation_key')}</div>;
-// }
+registerRoute({
+  path: '/agent-sandbox',
+  name: 'sandboxes',
+  exact: true,
+  sidebar: 'sandbox-list',
+  component: SandboxList,
+});
+
+registerRoute({
+  path: '/agent-sandbox/:name',
+  name: 'sandbox',
+  sidebar: 'sandbox-list',
+  component: SandboxDetail,
+});
+
+function Settings({ data, onDataChange }: PluginSettingsDetailsProps): ReactNode {
+  const config = { ...DEFAULT_CONFIG, ...data };
+
+  return (
+    <Stack spacing={2} sx={{ maxWidth: 420 }}>
+      <TextField
+        label="Namespace"
+        value={config.namespace}
+        onChange={event => onDataChange?.({ ...config, namespace: event.target.value })}
+        helperText="Namespace holding the Sandbox objects and the SandboxTemplate."
+        fullWidth
+      />
+      <TextField
+        label="Template name"
+        value={config.templateName}
+        onChange={event => onDataChange?.({ ...config, templateName: event.target.value })}
+        helperText="SandboxTemplate new sandboxes are created from."
+        fullWidth
+      />
+    </Stack>
+  );
+}
+
+registerPluginSettings(PLUGIN_NAME, Settings, true);

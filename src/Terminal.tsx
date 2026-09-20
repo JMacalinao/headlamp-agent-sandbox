@@ -1,0 +1,527 @@
+import '@xterm/xterm/css/xterm.css';
+import { Icon } from '@iconify/react';
+import { Loader } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
+import type Pod from '@kinvolk/headlamp-plugin/lib/lib/k8s/pod';
+import {
+  Alert,
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  IconButton,
+  LinearProgress,
+  Menu,
+  MenuItem,
+  Tab,
+  Tabs,
+  Tooltip,
+  Typography,
+} from '@mui/material';
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  attachCommand,
+  attachmentName,
+  CH_ERROR,
+  CH_STDERR,
+  CH_STDIN,
+  CH_STDOUT,
+  chunkBase64,
+  frameResize,
+  frameText,
+  killSessionCommand,
+  LIST_SESSIONS_COMMAND,
+  parseStatus,
+  unframe,
+  uploadCommand,
+} from './exec';
+import { AgentLauncher, AGENTS } from './sandbox';
+
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+type ExecStream = { cancel: () => void; getSocket: () => WebSocket | null };
+
+interface ExecResult {
+  stdout: string;
+  error: string | null;
+}
+
+/** Runs one non-interactive command to completion, optionally streaming base64 chunks to its stdin. */
+function runExec(
+  pod: Pod,
+  container: string,
+  command: string[],
+  input?: { chunks: string[]; onProgress: (sent: number) => void }
+): Promise<ExecResult> {
+  return new Promise<ExecResult>(resolve => {
+    const decoder = new TextDecoder();
+    let stdout = '';
+    let settled = false;
+
+    const finish = (error: string | null): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      stream.cancel();
+      resolve({ stdout, error });
+    };
+
+    const stream: ExecStream = pod.exec(
+      container,
+      (data: any) => {
+        const { channel, payload } = unframe(data as ArrayBuffer);
+        if (channel === CH_STDOUT || channel === CH_STDERR) {
+          stdout += decoder.decode(payload, { stream: true });
+        } else if (channel === CH_ERROR) {
+          const status = parseStatus(payload);
+          finish(status && !status.success ? status.message || 'the command failed' : null);
+        }
+      },
+      {
+        command,
+        tty: false,
+        stdin: !!input,
+        stdout: true,
+        stderr: true,
+        reconnectOnFailure: false,
+        connectCb: () => {
+          const socket = stream.getSocket();
+          if (!input || !socket) {
+            return;
+          }
+          void (async () => {
+            for (const [index, chunk] of input.chunks.entries()) {
+              socket.send(frameText(CH_STDIN, chunk));
+              input.onProgress(index + 1);
+              while (socket.bufferedAmount > 1024 * 1024) {
+                await new Promise(wake => setTimeout(wake, 20));
+              }
+            }
+          })();
+        },
+        failCb: () => finish('the connection closed before the command finished'),
+      }
+    );
+  });
+}
+
+function readBase64(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+    reader.onerror = () => reject(reader.error ?? new Error('the file could not be read'));
+    reader.readAsDataURL(file);
+  });
+}
+
+interface TerminalPaneProps {
+  pod: Pod;
+  container: string;
+  session: string;
+  run: string | undefined;
+  workspace: string;
+  visible: boolean;
+}
+
+function TerminalPane({
+  pod,
+  container,
+  session,
+  run,
+  workspace,
+  visible,
+}: TerminalPaneProps): React.ReactNode {
+  const holderRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<XTerm | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const streamRef = useRef<ExecStream | null>(null);
+  const pendingRef = useRef<Uint8Array[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const [upload, setUpload] = useState<{ name: string; sent: number; total: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const send = useCallback((bytes: Uint8Array): void => {
+    const socket = streamRef.current?.getSocket();
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(bytes);
+    } else {
+      pendingRef.current.push(bytes);
+    }
+  }, []);
+
+  useEffect(() => {
+    const holder = holderRef.current;
+    if (!holder) {
+      return undefined;
+    }
+
+    const term = new XTerm({ fontSize: 13, cursorBlink: true, scrollback: 10000 });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(holder);
+    termRef.current = term;
+    fitRef.current = fit;
+
+    // Exec'ing tmux directly means the process is tmux, not a login shell, so the image's rc
+    // never runs its own `exec tmux new -A -s main` and each tab gets its own named session.
+    const stream: ExecStream = pod.exec(
+      container,
+      (data: any) => {
+        const { channel, payload } = unframe(data as ArrayBuffer);
+        if (channel === CH_STDOUT || channel === CH_STDERR) {
+          term.write(payload);
+        } else if (channel === CH_ERROR) {
+          const status = parseStatus(payload);
+          if (status && !status.success) {
+            term.write(`\r\n\x1b[31m${status.message || 'The session ended.'}\x1b[0m\r\n`);
+          }
+        }
+      },
+      {
+        command: attachCommand(session, run),
+        tty: true,
+        stdin: true,
+        stdout: true,
+        stderr: true,
+        reconnectOnFailure: false,
+        connectCb: () => {
+          const socket = stream.getSocket();
+          if (!socket) {
+            return;
+          }
+          if (holder.offsetParent) {
+            fit.fit();
+          }
+          socket.send(frameResize(term.cols, term.rows));
+          pendingRef.current.splice(0).forEach(bytes => socket.send(bytes));
+        },
+        failCb: () => term.write('\r\n\x1b[31mConnection closed.\x1b[0m\r\n'),
+      }
+    );
+    streamRef.current = stream;
+
+    const typing = term.onData(data => send(frameText(CH_STDIN, data)));
+    const observer = new ResizeObserver(() => {
+      if (!holder.offsetParent) {
+        return;
+      }
+      fit.fit();
+      send(frameResize(term.cols, term.rows));
+    });
+    observer.observe(holder);
+
+    return () => {
+      observer.disconnect();
+      typing.dispose();
+      stream.cancel();
+      term.dispose();
+      streamRef.current = null;
+      termRef.current = null;
+      fitRef.current = null;
+    };
+  }, [pod, container, session, run, send]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!visible || !term) {
+      return;
+    }
+    fitRef.current?.fit();
+    send(frameResize(term.cols, term.rows));
+    term.focus();
+  }, [visible, send]);
+
+  const handleFiles = useCallback(
+    async (files: File[]): Promise<void> => {
+      for (const file of files) {
+        if (file.size > MAX_UPLOAD_BYTES) {
+          setError(
+            `${file.name} is ${(file.size / 1024 / 1024).toFixed(1)} MiB; the limit is 10 MiB.`
+          );
+          continue;
+        }
+
+        let encoded: string;
+        try {
+          encoded = await readBase64(file);
+        } catch (err) {
+          setError(`Could not read ${file.name}: ${(err as Error).message}`);
+          continue;
+        }
+
+        const directory = `${workspace}/.attachments`;
+        const path = `${directory}/${attachmentName(file.name)}`;
+        const chunks = chunkBase64(encoded);
+        setError(null);
+        setUpload({ name: file.name, sent: 0, total: chunks.length });
+        // A second, non-interactive exec keeps the file bytes out of the agent's terminal.
+        const result = await runExec(
+          pod,
+          container,
+          uploadCommand(directory, path, encoded.length),
+          {
+            chunks,
+            onProgress: sent => setUpload(current => (current ? { ...current, sent } : current)),
+          }
+        );
+        setUpload(null);
+
+        if (result.error) {
+          setError(`Upload of ${file.name} failed: ${result.error}`);
+          continue;
+        }
+        send(frameText(CH_STDIN, `${path} `));
+      }
+    },
+    [pod, container, workspace, send]
+  );
+
+  return (
+    <Box
+      sx={{
+        display: visible ? 'flex' : 'none',
+        flexDirection: 'column',
+        height: '100%',
+        position: 'relative',
+      }}
+      onDragOver={event => {
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={event => {
+        event.preventDefault();
+        setDragging(false);
+        void handleFiles(Array.from(event.dataTransfer.files));
+      }}
+      onPaste={event => {
+        const files = Array.from(event.clipboardData.files);
+        if (files.length === 0) {
+          return;
+        }
+        event.preventDefault();
+        void handleFiles(files);
+      }}
+    >
+      {error && (
+        <Alert severity="error" onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
+      {upload && (
+        <Box sx={{ px: 1, py: 0.5 }}>
+          <Typography variant="caption">Uploading {upload.name}</Typography>
+          <LinearProgress variant="determinate" value={(upload.sent / upload.total) * 100} />
+        </Box>
+      )}
+      <Box ref={holderRef} sx={{ flexGrow: 1, minHeight: 320, overflow: 'hidden' }} />
+      {dragging && (
+        <Box
+          sx={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: '2px dashed',
+            borderColor: 'primary.main',
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            pointerEvents: 'none',
+          }}
+        >
+          <Typography variant="h6">Drop files to upload to {workspace}/.attachments</Typography>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+export interface SandboxTerminalProps {
+  pod: Pod;
+  container: string;
+  namespace: string;
+  workspace?: string;
+}
+
+export function SandboxTerminal({
+  pod,
+  container,
+  workspace = '/workspace',
+}: SandboxTerminalProps): React.ReactNode {
+  const [sessions, setSessions] = useState<string[] | null>(null);
+  const [commands, setCommands] = useState<Record<string, string | undefined>>({});
+  const [active, setActive] = useState('');
+  const [addAnchor, setAddAnchor] = useState<HTMLElement | null>(null);
+  const [menu, setMenu] = useState<{ anchor: HTMLElement; session: string } | null>(null);
+  const [killing, setKilling] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void runExec(pod, container, LIST_SESSIONS_COMMAND).then(result => {
+      if (cancelled) {
+        return;
+      }
+      const names = result.stdout
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean);
+      setSessions(names);
+      setActive(names[0] ?? '');
+      setListError(result.error);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pod, container]);
+
+  function closeTab(session: string): void {
+    const remaining = (sessions ?? []).filter(name => name !== session);
+    setSessions(remaining);
+    if (active === session) {
+      setActive(remaining[0] ?? '');
+    }
+  }
+
+  function openSession(agent: AgentLauncher): void {
+    const existing = sessions ?? [];
+    let name = agent.id;
+    for (let suffix = 2; existing.includes(name); suffix++) {
+      name = `${agent.id}-${suffix}`;
+    }
+    setSessions([...existing, name]);
+    setCommands(current => ({ ...current, [name]: agent.command }));
+    setActive(name);
+    setAddAnchor(null);
+  }
+
+  async function killSession(session: string): Promise<void> {
+    setKilling(null);
+    const result = await runExec(pod, container, killSessionCommand(session));
+    setListError(result.error);
+    closeTab(session);
+  }
+
+  if (sessions === null) {
+    return <Loader title="Looking for terminal sessions" />;
+  }
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: 560 }}>
+      {listError && <Alert severity="warning">{listError}</Alert>}
+      <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
+        <Tabs
+          value={active || false}
+          onChange={(_event, value: string) => setActive(value)}
+          variant="scrollable"
+          scrollButtons="auto"
+          sx={{ flexGrow: 1, minHeight: 40 }}
+        >
+          {sessions.map(session => (
+            <Tab
+              key={session}
+              value={session}
+              component="div"
+              sx={{ textTransform: 'none', minHeight: 40 }}
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  {session}
+                  <Tooltip title="Close this tab; the session keeps running">
+                    <IconButton
+                      size="small"
+                      aria-label={`Close the ${session} tab`}
+                      onClick={event => {
+                        event.stopPropagation();
+                        closeTab(session);
+                      }}
+                    >
+                      <Icon icon="mdi:close" width={14} />
+                    </IconButton>
+                  </Tooltip>
+                  <IconButton
+                    size="small"
+                    aria-label={`Actions for the ${session} session`}
+                    onClick={event => {
+                      event.stopPropagation();
+                      setMenu({ anchor: event.currentTarget, session });
+                    }}
+                  >
+                    <Icon icon="mdi:dots-vertical" width={14} />
+                  </IconButton>
+                </Box>
+              }
+            />
+          ))}
+        </Tabs>
+        <Button
+          size="small"
+          startIcon={<Icon icon="mdi:plus" />}
+          onClick={event => setAddAnchor(event.currentTarget)}
+        >
+          New session
+        </Button>
+      </Box>
+
+      <Menu anchorEl={addAnchor} open={!!addAnchor} onClose={() => setAddAnchor(null)}>
+        {AGENTS.map(agent => (
+          <MenuItem key={agent.id} onClick={() => openSession(agent)}>
+            {agent.label}
+          </MenuItem>
+        ))}
+      </Menu>
+
+      <Menu anchorEl={menu?.anchor} open={!!menu} onClose={() => setMenu(null)}>
+        <MenuItem
+          onClick={() => {
+            setKilling(menu?.session ?? null);
+            setMenu(null);
+          }}
+        >
+          Kill session
+        </MenuItem>
+      </Menu>
+
+      <Dialog open={!!killing} onClose={() => setKilling(null)}>
+        <DialogTitle>Kill session {killing}?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This terminates the agent running in the session and every process it started. Anything
+            it has not written to the workspace is lost.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setKilling(null)}>Cancel</Button>
+          <Button color="error" onClick={() => void killSession(killing as string)}>
+            Kill session
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {sessions.length === 0 ? (
+        <Box sx={{ p: 2 }}>
+          <Typography>
+            No terminal sessions yet. Use &ldquo;New session&rdquo; to start one.
+          </Typography>
+        </Box>
+      ) : (
+        // Every pane stays mounted and hidden so switching tabs keeps the socket and scrollback.
+        sessions.map(session => (
+          <TerminalPane
+            key={session}
+            pod={pod}
+            container={container}
+            session={session}
+            run={commands[session]}
+            workspace={workspace}
+            visible={session === active}
+          />
+        ))
+      )}
+    </Box>
+  );
+}

@@ -95,6 +95,9 @@ npm run test:unit   # runs test/*.test.js with node --test
 npm run lint
 ```
 
+The `Dockerfile` has no build stage — it copies `dist/` into a `busybox` image, so
+run `npm run build` before `docker build`.
+
 ## License
 
 Apache-2.0, see [LICENSE](./LICENSE).

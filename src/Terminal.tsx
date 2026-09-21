@@ -490,6 +490,14 @@ function TerminalPane({
     connect(true);
 
     const typing = term.onData(sendKey);
+    // Copy on select, as terminals do: Ctrl+Shift+C is DevTools in Brave, and the Shift-forced
+    // selection under tmux mouse mode does not survive the mouseup.
+    const selecting = term.onSelectionChange(() => {
+      const text = term.getSelection();
+      if (text) {
+        void navigator.clipboard.writeText(text);
+      }
+    });
     const observer = new ResizeObserver(refit);
     observer.observe(holder);
 
@@ -544,6 +552,7 @@ function TerminalPane({
       holder.removeEventListener('touchstart', onTouchStart);
       holder.removeEventListener('touchmove', onTouchMove);
       typing.dispose();
+      selecting.dispose();
       streamRef.current?.cancel();
       uploadStreamRef.current?.cancel();
       uploadStreamRef.current = null;

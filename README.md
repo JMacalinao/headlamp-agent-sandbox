@@ -22,6 +22,8 @@ uploaded into the sandbox and typed into the agent's prompt as a path.
 Hyperlinks in the output open in a new tab on `Ctrl`+click (`Cmd`+click on a
 Mac, or the sticky `Ctrl` key then a tap) and copy to the clipboard on
 `Ctrl`+right-click; a plain click stays a tmux click.
+Text is copied to the clipboard as soon as it is selected; under tmux's mouse
+mode hold `Shift` while dragging so the drag selects instead of going to tmux.
 
 Because a phone is a first-class way to drive this, each terminal carries a row
 of keys a touch keyboard does not have — `Esc`, `Tab`, `Ctrl-C`, the arrows,

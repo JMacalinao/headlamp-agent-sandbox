@@ -46,6 +46,7 @@ import {
   WHEEL_DOWN,
   WHEEL_UP,
 } from './exec';
+import { ensureTerminalFont, TERMINAL_FONT } from './font';
 import { AgentLauncher, AGENTS } from './sandbox';
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -238,6 +239,7 @@ function TerminalPane({
   const pendingRef = useRef<Uint8Array[]>([]);
   const ctrlArmedRef = useRef(false);
   const shiftArmedRef = useRef(false);
+  const fontAppliedRef = useRef(false);
   const sizeRef = useRef({ cols: 0, rows: 0 });
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [ctrlArmed, setCtrlArmed] = useState(false);
@@ -268,8 +270,12 @@ function TerminalPane({
       return;
     }
     sizeRef.current = { cols: term.cols, rows: term.rows };
-    send(frameResize(term.cols, term.rows));
-  }, [send]);
+    // Never queued: a resize sent at socket open carries whatever the size is by then.
+    const socket = streamRef.current?.getSocket();
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(frameResize(term.cols, term.rows));
+    }
+  }, []);
 
   const armCtrl = useCallback((armed: boolean): void => {
     ctrlArmedRef.current = armed;
@@ -378,6 +384,7 @@ function TerminalPane({
       if (holder.offsetParent) {
         fit.fit();
       }
+      sizeRef.current = { cols: term.cols, rows: term.rows };
       socket.send(frameResize(term.cols, term.rows));
       // Typed into the shell rather than passed to tmux: tmux would exec the binary and skip the
       // image's rc, where `claude` is a function supplying the unique socket path it needs.
@@ -443,6 +450,7 @@ function TerminalPane({
       streamRef.current = null;
       termRef.current = null;
       fitRef.current = null;
+      fontAppliedRef.current = false;
     };
   }, [pod, container, session, run, send, sendKey, refit, armShift, armCtrl]);
 
@@ -455,6 +463,28 @@ function TerminalPane({
     // fullscreen and the phone keyboard both resize the pane; without a refit the remote pty
     // keeps the old dimensions and the display corrupts.
   }, [visible, fullscreen, viewportHeight, refit]);
+
+  // Applied once the pane has a layout box: xterm re-measures the cell on the option change, and
+  // a display:none pane measures as zero and keeps the fallback metrics for good.
+  useEffect(() => {
+    if (!visible || fontAppliedRef.current) {
+      return;
+    }
+    ensureTerminalFont()
+      .then(() => {
+        const term = termRef.current;
+        if (!term || fontAppliedRef.current || !holderRef.current?.offsetParent) {
+          return;
+        }
+        fontAppliedRef.current = true;
+        term.options.fontFamily = TERMINAL_FONT;
+        refit();
+      })
+      .catch((error: unknown) => {
+        console.warn('Terminal font could not be applied.', error);
+      });
+    // The term is recreated with the mount effect's inputs; the font has to follow it.
+  }, [visible, refit, pod, container, session, run]);
 
   const handleFiles = useCallback(
     async (files: File[]): Promise<void> => {

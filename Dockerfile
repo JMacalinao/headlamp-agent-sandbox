@@ -3,9 +3,10 @@
 # enough to evict the runner off its node. Run `npm run build` before `docker build`.
 FROM docker.io/library/busybox:1.36
 
-# dist/main.js + package.json is the pair Headlamp's -plugins-dir expects, named
-# after the plugin. World-readable: the consuming initContainer runs as uid 100.
-COPY dist/main.js package.json /plugin/headlamp-agent-sandbox/
+# main.js + package.json is the pair Headlamp's -plugins-dir expects, named after
+# the plugin; dist/fonts/ carries the licenses of the font inlined into main.js.
+# World-readable: the consuming initContainer runs as uid 100.
+COPY dist/ package.json /plugin/headlamp-agent-sandbox/
 RUN chmod -R a+rX /plugin
 
 CMD ["true"]

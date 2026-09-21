@@ -78,7 +78,8 @@ jobs:
           docker run --rm --network none --user 100:101 --entrypoint /bin/sh \
             "${{ steps.tag.outputs.ref }}" -c \
             'test -s /plugin/headlamp-agent-sandbox/main.js &&
-             test -s /plugin/headlamp-agent-sandbox/package.json'
+             test -s /plugin/headlamp-agent-sandbox/package.json &&
+             test -s /plugin/headlamp-agent-sandbox/fonts/LICENSE.txt'
 
       - name: Log in to registry
         env:

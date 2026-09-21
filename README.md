@@ -36,6 +36,15 @@ screen otherwise has no gesture for, and the key row follows the visual
 viewport: fullscreen sizes itself to it, and in the page the row pins itself
 just above the on-screen keyboard rather than hiding under it.
 
+The terminal renders in JetBrainsMono Nerd Font Mono, bundled into the plugin
+so phones and desktops draw the same glyphs; the two faces are what make
+`main.js` a few megabytes. The font is under the SIL Open Font License and the
+icon sets under the licenses listed in `src/fonts/README.md`; both files ship in
+the image next to `main.js`. The `.woff2` files are the Regular and Bold
+`JetBrainsMonoNerdFontMono` faces from Nerd Fonts v3.5.1 (`JetBrainsMono.tar.xz`,
+sha256 `04d5e8f903693f9dd13e16f867e994834e681eb3c72c0d337a770dcda09010cf`),
+converted with `fonttools ttLib.woff2 compress`.
+
 Launching an agent types its name into the session's shell rather than handing it
 to `tmux` as the session's command. That means the shell's own startup files
 apply — several agents are wrapped in shell functions that pass per-instance

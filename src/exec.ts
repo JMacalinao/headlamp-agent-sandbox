@@ -114,6 +114,35 @@ export function killSessionCommand(session: string): string[] {
 export const WHEEL_UP = '\x1b[<64;1;1M';
 export const WHEEL_DOWN = '\x1b[<65;1;1M';
 
+// ESC CR is what Claude Code's own terminal bindings send for Shift+Enter; xterm sends a bare CR
+// for the chord and has no kitty encoding to say otherwise.
+export const SHIFT_ENTER = '\x1b\r';
+
+const SHIFTED = new Map<string, string>([
+  ['\t', '\x1b[Z'],
+  ['\r', SHIFT_ENTER],
+  ['\x1b[A', '\x1b[1;2A'],
+  ['\x1b[B', '\x1b[1;2B'],
+  ['\x1b[C', '\x1b[1;2C'],
+  ['\x1b[D', '\x1b[1;2D'],
+  ['\x1b[H', '\x1b[1;2H'],
+  ['\x1b[F', '\x1b[1;2F'],
+]);
+
+/** What `data` sends with Shift held, or undefined where Shift has no meaning (pastes, reports). */
+export function shifted(data: string): string | undefined {
+  const sequence = SHIFTED.get(data);
+  if (sequence !== undefined) {
+    return sequence;
+  }
+  if ([...data].length !== 1) {
+    return undefined;
+  }
+  // ß upper-cases to SS; a key that grows is not one key.
+  const upper = data.toUpperCase();
+  return [...upper].length === 1 ? upper : data;
+}
+
 /** Whole scroll steps from an accumulated touch drag, truncated toward zero so the rest carries. */
 export function scrollSteps(pixels: number, rowHeight: number): number {
   return rowHeight > 0 ? Math.trunc(pixels / rowHeight) : 0;

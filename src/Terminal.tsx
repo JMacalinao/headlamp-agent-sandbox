@@ -39,6 +39,8 @@ import {
   LIST_SESSIONS_COMMAND,
   parseStatus,
   scrollSteps,
+  SHIFT_ENTER,
+  shifted,
   unframe,
   uploadCommand,
   WHEEL_DOWN,
@@ -235,9 +237,11 @@ function TerminalPane({
   const disposedRef = useRef(false);
   const pendingRef = useRef<Uint8Array[]>([]);
   const ctrlArmedRef = useRef(false);
+  const shiftArmedRef = useRef(false);
   const sizeRef = useRef({ cols: 0, rows: 0 });
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [ctrlArmed, setCtrlArmed] = useState(false);
+  const [shiftArmed, setShiftArmed] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [upload, setUpload] = useState<{ name: string; sent: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -272,17 +276,29 @@ function TerminalPane({
     setCtrlArmed(armed);
   }, []);
 
-  // onData is registered once at mount, so the armed flag has to be read from the ref.
+  const armShift = useCallback((armed: boolean): void => {
+    shiftArmedRef.current = armed;
+    setShiftArmed(armed);
+  }, []);
+
+  // onData is registered once at mount, so the armed flags have to be read from the refs.
   const sendKey = useCallback(
     (data: string): void => {
-      if (ctrlArmedRef.current && data.length === 1 && data >= ' ' && data <= '~') {
-        armCtrl(false);
-        send(frameText(CH_STDIN, String.fromCharCode(data.toUpperCase().charCodeAt(0) & 0x1f)));
-        return;
+      let key = data;
+      if (shiftArmedRef.current) {
+        const chord = shifted(key);
+        if (chord !== undefined) {
+          armShift(false);
+          key = chord;
+        }
       }
-      send(frameText(CH_STDIN, data));
+      if (ctrlArmedRef.current && key.length === 1 && key >= ' ' && key <= '~') {
+        armCtrl(false);
+        key = String.fromCharCode(key.toUpperCase().charCodeAt(0) & 0x1f);
+      }
+      send(frameText(CH_STDIN, key));
     },
-    [send, armCtrl]
+    [send, armCtrl, armShift]
   );
 
   useEffect(() => {
@@ -300,6 +316,29 @@ function TerminalPane({
     term.open(holder);
     termRef.current = term;
     fitRef.current = fit;
+
+    // Returning false skips xterm's own preventDefault and composition handling as well as the
+    // keypress it would otherwise turn into a bare CR, so both are covered here.
+    term.attachCustomKeyEventHandler(event => {
+      if (
+        event.key !== 'Enter' ||
+        !event.shiftKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.metaKey ||
+        event.isComposing ||
+        event.keyCode === 229
+      ) {
+        return true;
+      }
+      if (event.type === 'keydown') {
+        event.preventDefault();
+        armShift(false);
+        armCtrl(false);
+        send(frameText(CH_STDIN, SHIFT_ENTER));
+      }
+      return false;
+    });
 
     // Exec'ing tmux directly means the process is tmux, not a login shell, so the image's rc
     // never runs its own `exec tmux new -A -s main` and each tab gets its own named session.
@@ -405,7 +444,7 @@ function TerminalPane({
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [pod, container, session, run, send, sendKey, refit]);
+  }, [pod, container, session, run, send, sendKey, refit, armShift, armCtrl]);
 
   useEffect(() => {
     if (!visible) {
@@ -576,6 +615,17 @@ function TerminalPane({
           onClick={() => armCtrl(!ctrlArmed)}
         >
           Ctrl
+        </Button>
+        <Button
+          size="small"
+          variant={shiftArmed ? 'contained' : 'outlined'}
+          aria-pressed={shiftArmed}
+          sx={{ minWidth: 40, px: 1 }}
+          onPointerDown={keepFocus}
+          onMouseDown={keepFocus}
+          onClick={() => armShift(!shiftArmed)}
+        >
+          Shift
         </Button>
         {KEYS.map(key => (
           <Button

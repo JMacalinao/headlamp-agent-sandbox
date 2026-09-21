@@ -22,10 +22,15 @@ uploaded into the sandbox and typed into the agent's prompt as a path.
 
 Because a phone is a first-class way to drive this, each terminal carries a row
 of keys a touch keyboard does not have — `Esc`, `Tab`, `Ctrl-C`, the arrows,
-`Home`/`End`, tmux's `Ctrl-B` prefix — plus a sticky `Ctrl` that applies to the
-next key you press, a button that expands the terminal to fill the viewport, and
-an upload button for the case where pasting a file is not practical. Tapping any
-of them leaves the terminal focused, so the on-screen keyboard stays up.
+`Home`/`End`, tmux's `Ctrl-B` prefix — plus sticky `Ctrl` and `Shift` keys that
+apply to the next key you press, a button that expands the terminal to fill the
+viewport, and an upload button for the case where pasting a file is not
+practical. The sticky `Shift` is how a touch keyboard, whose own shift only
+capitalizes letters, gets `Shift+Tab` and `Shift+Enter`. `Shift+Enter` is sent
+as `ESC CR`, the sequence Claude Code's terminal bindings use for a newline,
+from a physical keyboard too — xterm.js would otherwise send it as a plain
+`Enter`. Tapping any of them leaves the terminal focused, so the on-screen
+keyboard stays up.
 Dragging on the terminal scrolls back through tmux's history, which a touch
 screen otherwise has no gesture for, and the key row follows the visual
 viewport: fullscreen sizes itself to it, and in the page the row pins itself

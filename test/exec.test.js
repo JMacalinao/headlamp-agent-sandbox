@@ -19,6 +19,8 @@ import {
   killSessionCommand,
   scrollSteps,
   keyboardInset,
+  shifted,
+  SHIFT_ENTER,
   WHEEL_UP,
   WHEEL_DOWN,
 } from '../src/exec.ts';
@@ -212,6 +214,33 @@ test('scrollSteps yields 0 for an unmeasurable row height', () => {
 test('wheel sequences are SGR button 64 and 65 press reports', () => {
   assert.equal(WHEEL_UP, '\u001b[<64;1;1M');
   assert.equal(WHEEL_DOWN, '\u001b[<65;1;1M');
+});
+
+test('shifted maps the toolbar keys to their Shift chords', () => {
+  assert.equal(shifted('\t'), '\u001b[Z');
+  assert.equal(shifted('\r'), SHIFT_ENTER);
+  assert.equal(SHIFT_ENTER, '\u001b\r');
+  assert.equal(shifted('\u001b[A'), '\u001b[1;2A');
+  assert.equal(shifted('\u001b[D'), '\u001b[1;2D');
+  assert.equal(shifted('\u001b[H'), '\u001b[1;2H');
+  assert.equal(shifted('\u001b[F'), '\u001b[1;2F');
+});
+
+test('shifted capitalizes a letter and leaves other single keys as they are', () => {
+  assert.equal(shifted('a'), 'A');
+  assert.equal(shifted('A'), 'A');
+  assert.equal(shifted('é'), 'É');
+  assert.equal(shifted('ß'), 'ß');
+  assert.equal(shifted('1'), '1');
+  assert.equal(shifted('\u001b'), '\u001b');
+  // One key even though it is two UTF-16 units.
+  assert.equal(shifted('\u{1f600}'), '\u{1f600}');
+});
+
+test('shifted has no meaning for pastes and mouse reports', () => {
+  assert.equal(shifted('ls -la'), undefined);
+  assert.equal(shifted(WHEEL_UP), undefined);
+  assert.equal(shifted(''), undefined);
 });
 
 test('keyboardInset reports what the keyboard covers and ignores everything smaller', () => {

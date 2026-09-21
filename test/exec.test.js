@@ -19,6 +19,8 @@ import {
   killSessionCommand,
   scrollSteps,
   keyboardInset,
+  MAX_RECONNECTS,
+  reconnectDelay,
   shifted,
   SHIFT_ENTER,
   WHEEL_UP,
@@ -252,4 +254,12 @@ test('keyboardInset reports what the keyboard covers and ignores everything smal
   assert.equal(keyboardInset(460, 460, 0), 0);
   // The visual viewport scrolled down inside the layout viewport.
   assert.equal(keyboardInset(800, 460, 60), 280);
+});
+
+test('reconnectDelay doubles from 1s and caps at 10s', () => {
+  assert.deepEqual(
+    [0, 1, 2, 3, 4, 5, 6].map(reconnectDelay),
+    [1000, 1000, 2000, 4000, 8000, 10000, 10000]
+  );
+  assert.equal(MAX_RECONNECTS, 6);
 });

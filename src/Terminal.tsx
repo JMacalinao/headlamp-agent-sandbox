@@ -37,7 +37,9 @@ import {
   keyboardInset,
   killSessionCommand,
   LIST_SESSIONS_COMMAND,
+  MAX_RECONNECTS,
   parseStatus,
+  reconnectDelay,
   scrollSteps,
   SHIFT_ENTER,
   shifted,
@@ -315,6 +317,11 @@ function TerminalPane({
 
     disposedRef.current = false;
     let cancelled = false;
+    // A status frame means the process exited on its own; only a close without one is a drop.
+    let ended = false;
+    let attempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let retryOnForeground = false;
 
     const term = new XTerm({ fontSize: 13, cursorBlink: true, scrollback: 10000 });
     const fit = new FitAddon();
@@ -346,53 +353,106 @@ function TerminalPane({
       return false;
     });
 
+    const onFrame = (data: any): void => {
+      const { channel, payload } = unframe(data as ArrayBuffer);
+      if (channel === CH_STDOUT || channel === CH_STDERR) {
+        term.write(payload);
+      } else if (channel === CH_ERROR) {
+        ended = true;
+        const status = parseStatus(payload);
+        if (status && !status.success) {
+          term.write(`\r\n\x1b[31m${status.message || 'The session ended.'}\x1b[0m\r\n`);
+        }
+      }
+    };
+
     // Exec'ing tmux directly means the process is tmux, not a login shell, so the image's rc
     // never runs its own `exec tmux new -A -s main` and each tab gets its own named session.
-    const stream: ExecStream = pod.exec(
-      container,
-      (data: any) => {
-        const { channel, payload } = unframe(data as ArrayBuffer);
-        if (channel === CH_STDOUT || channel === CH_STDERR) {
-          term.write(payload);
-        } else if (channel === CH_ERROR) {
-          const status = parseStatus(payload);
-          if (status && !status.success) {
-            term.write(`\r\n\x1b[31m${status.message || 'The session ended.'}\x1b[0m\r\n`);
-          }
-        }
-      },
-      {
+    // The same `new -A` is what makes a reconnect a plain reattach.
+    const connect = (first: boolean): void => {
+      const stream: ExecStream = pod.exec(container, onFrame, {
         command: attachCommand(session),
         tty: true,
         stdin: true,
         stdout: true,
         stderr: true,
         reconnectOnFailure: false,
-        failCb: () => {
-          cancelled = true;
-          term.write('\r\n\x1b[31mConnection closed.\x1b[0m\r\n');
-        },
-      }
-    );
-    streamRef.current = stream;
+        failCb: onFail,
+      });
+      streamRef.current = stream;
 
-    void (async () => {
-      const socket = await waitForOpenSocket(stream, () => cancelled);
-      if (!socket) {
+      void (async () => {
+        const socket = await waitForOpenSocket(
+          stream,
+          () => cancelled || streamRef.current !== stream
+        );
+        if (!socket) {
+          return;
+        }
+        attempts = 0;
+        if (holder.offsetParent) {
+          fit.fit();
+        }
+        sizeRef.current = { cols: term.cols, rows: term.rows };
+        socket.send(frameResize(term.cols, term.rows));
+        // Typed into the shell rather than passed to tmux: tmux would exec the binary and skip the
+        // image's rc, where `claude` is a function supplying the unique socket path it needs.
+        if (first && run !== undefined) {
+          socket.send(frameText(CH_STDIN, `${run}\n`));
+        }
+        pendingRef.current.splice(0).forEach(bytes => socket.send(bytes));
+      })();
+    };
+
+    function onFail(): void {
+      if (cancelled) {
         return;
       }
-      if (holder.offsetParent) {
-        fit.fit();
+      // Keys typed into the dead socket are gone; replaying them into a fresh attach is worse.
+      pendingRef.current.length = 0;
+      if (ended || attempts >= MAX_RECONNECTS) {
+        cancelled = true;
+        term.write('\r\n\x1b[31mConnection closed.\x1b[0m\r\n');
+        return;
       }
-      sizeRef.current = { cols: term.cols, rows: term.rows };
-      socket.send(frameResize(term.cols, term.rows));
-      // Typed into the shell rather than passed to tmux: tmux would exec the binary and skip the
-      // image's rc, where `claude` is a function supplying the unique socket path it needs.
-      if (run !== undefined) {
-        socket.send(frameText(CH_STDIN, `${run}\n`));
+      attempts += 1;
+      term.write(
+        `\r\n\x1b[33mConnection lost, reconnecting (${attempts}/${MAX_RECONNECTS})...\x1b[0m\r\n`
+      );
+      // A sleeping phone has no network; retrying now would only burn the attempts.
+      if (document.visibilityState === 'hidden') {
+        retryOnForeground = true;
+        return;
       }
-      pendingRef.current.splice(0).forEach(bytes => socket.send(bytes));
-    })();
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        connect(false);
+      }, reconnectDelay(attempts));
+    }
+
+    const onVisibility = (): void => {
+      if (document.visibilityState !== 'visible' || cancelled) {
+        return;
+      }
+      if (retryOnForeground || retryTimer !== null) {
+        retryOnForeground = false;
+        if (retryTimer !== null) {
+          clearTimeout(retryTimer);
+          retryTimer = null;
+        }
+        connect(false);
+        return;
+      }
+      // A socket the browser still reports open may be dead after a suspend; the resize is a
+      // probe, since the first send on a dead socket is what surfaces its close.
+      const socket = streamRef.current?.getSocket();
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(frameResize(term.cols, term.rows));
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    connect(true);
 
     const typing = term.onData(sendKey);
     const observer = new ResizeObserver(refit);
@@ -439,11 +499,15 @@ function TerminalPane({
     return () => {
       disposedRef.current = true;
       cancelled = true;
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+      }
+      document.removeEventListener('visibilitychange', onVisibility);
       observer.disconnect();
       holder.removeEventListener('touchstart', onTouchStart);
       holder.removeEventListener('touchmove', onTouchMove);
       typing.dispose();
-      stream.cancel();
+      streamRef.current?.cancel();
       uploadStreamRef.current?.cancel();
       uploadStreamRef.current = null;
       term.dispose();

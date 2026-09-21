@@ -114,6 +114,13 @@ export function killSessionCommand(session: string): string[] {
 export const WHEEL_UP = '\x1b[<64;1;1M';
 export const WHEEL_DOWN = '\x1b[<65;1;1M';
 
+export const MAX_RECONNECTS = 6;
+
+/** Milliseconds to wait before reconnect attempt `attempt` (1-based): 1s doubling, capped at 10s. */
+export function reconnectDelay(attempt: number): number {
+  return Math.min(1000 * 2 ** Math.max(attempt - 1, 0), 10000);
+}
+
 // ESC CR is what Claude Code's own terminal bindings send for Shift+Enter; xterm sends a bare CR
 // for the chord and has no kitty encoding to say otherwise.
 export const SHIFT_ENTER = '\x1b\r';

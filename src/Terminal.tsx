@@ -323,7 +323,22 @@ function TerminalPane({
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let retryOnForeground = false;
 
-    const term = new XTerm({ fontSize: 13, cursorBlink: true, scrollback: 10000 });
+    const term = new XTerm({
+      fontSize: 13,
+      cursorBlink: true,
+      scrollback: 10000,
+      // Replaces xterm's native confirm(), which Brave silently dismisses after the first open.
+      // Plain click stays a tmux click; Ctrl/Cmd or the sticky Ctrl key opens the link.
+      linkHandler: {
+        activate: (event, uri) => {
+          if (!event.ctrlKey && !event.metaKey && !ctrlArmedRef.current) {
+            return;
+          }
+          armCtrl(false);
+          window.open(uri, '_blank', 'noopener');
+        },
+      },
+    });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(holder);

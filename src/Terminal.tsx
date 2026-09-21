@@ -36,8 +36,11 @@ import {
   killSessionCommand,
   LIST_SESSIONS_COMMAND,
   parseStatus,
+  scrollSteps,
   unframe,
   uploadCommand,
+  WHEEL_DOWN,
+  WHEEL_UP,
 } from './exec';
 import { AgentLauncher, AGENTS } from './sandbox';
 
@@ -205,6 +208,8 @@ interface TerminalPaneProps {
   workspace: string;
   visible: boolean;
   fullscreen: boolean;
+  /** Only a refit trigger: the pane is sized by its parent, not by this number. */
+  viewportHeight: number | null;
 }
 
 function TerminalPane({
@@ -215,6 +220,7 @@ function TerminalPane({
   workspace,
   visible,
   fullscreen,
+  viewportHeight,
 }: TerminalPaneProps): React.ReactNode {
   const holderRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
@@ -224,6 +230,7 @@ function TerminalPane({
   const disposedRef = useRef(false);
   const pendingRef = useRef<Uint8Array[]>([]);
   const ctrlArmedRef = useRef(false);
+  const sizeRef = useRef({ cols: 0, rows: 0 });
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [ctrlArmed, setCtrlArmed] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -238,6 +245,22 @@ function TerminalPane({
       pendingRef.current.push(bytes);
     }
   }, []);
+
+  // Every geometry change funnels here. The phone keyboard animation alone fires a resize per
+  // frame and each frameResize is a socket message, so unchanged dimensions are dropped.
+  const refit = useCallback((): void => {
+    const term = termRef.current;
+    const holder = holderRef.current;
+    if (!term || !holder?.offsetParent) {
+      return;
+    }
+    fitRef.current?.fit();
+    if (term.cols === sizeRef.current.cols && term.rows === sizeRef.current.rows) {
+      return;
+    }
+    sizeRef.current = { cols: term.cols, rows: term.rows };
+    send(frameResize(term.cols, term.rows));
+  }, [send]);
 
   const armCtrl = useCallback((armed: boolean): void => {
     ctrlArmedRef.current = armed;
@@ -321,19 +344,53 @@ function TerminalPane({
     })();
 
     const typing = term.onData(sendKey);
-    const observer = new ResizeObserver(() => {
-      if (!holder.offsetParent) {
+    const observer = new ResizeObserver(refit);
+    observer.observe(holder);
+
+    // xterm has no touch scrolling, and under tmux there is no xterm scrollback to scroll anyway:
+    // tmux holds the history and listens for wheel reports. Turn a drag into both.
+    let dragY: number | null = null;
+    let dragPixels = 0;
+
+    const onTouchStart = (event: TouchEvent): void => {
+      dragY = event.touches.length === 1 ? event.touches[0].clientY : null;
+      dragPixels = 0;
+    };
+
+    const onTouchMove = (event: TouchEvent): void => {
+      if (dragY === null || event.touches.length !== 1) {
         return;
       }
-      fit.fit();
-      send(frameResize(term.cols, term.rows));
-    });
-    observer.observe(holder);
+      const y = event.touches[0].clientY;
+      dragPixels += y - dragY;
+      dragY = y;
+      // Measured, not tuned: one drag pixel stays one row whatever the font size and zoom are.
+      const rowHeight = (term.element?.clientHeight ?? 0) / term.rows;
+      const steps = scrollSteps(dragPixels, rowHeight);
+      if (steps === 0) {
+        return;
+      }
+      dragPixels -= steps * rowHeight;
+      // Only now, once this is a scroll and not a tap: canceling earlier would eat the tap that
+      // focuses the terminal and opens the keyboard.
+      event.preventDefault();
+      // Dragging the content down reveals older output, so a positive delta scrolls back.
+      if (term.modes.mouseTrackingMode === 'none') {
+        term.scrollLines(-steps);
+      } else {
+        send(frameText(CH_STDIN, (steps > 0 ? WHEEL_UP : WHEEL_DOWN).repeat(Math.abs(steps))));
+      }
+    };
+
+    holder.addEventListener('touchstart', onTouchStart, { passive: true });
+    holder.addEventListener('touchmove', onTouchMove, { passive: false });
 
     return () => {
       disposedRef.current = true;
       cancelled = true;
       observer.disconnect();
+      holder.removeEventListener('touchstart', onTouchStart);
+      holder.removeEventListener('touchmove', onTouchMove);
       typing.dispose();
       stream.cancel();
       uploadStreamRef.current?.cancel();
@@ -343,18 +400,17 @@ function TerminalPane({
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [pod, container, session, run, send, sendKey]);
+  }, [pod, container, session, run, send, sendKey, refit]);
 
   useEffect(() => {
-    const term = termRef.current;
-    if (!visible || !term) {
+    if (!visible) {
       return;
     }
-    fitRef.current?.fit();
-    send(frameResize(term.cols, term.rows));
-    term.focus();
-    // fullscreen resizes the pane; without a refit the remote pty keeps the old dimensions.
-  }, [visible, fullscreen, send]);
+    refit();
+    termRef.current?.focus();
+    // fullscreen and the phone keyboard both resize the pane; without a refit the remote pty
+    // keeps the old dimensions and the display corrupts.
+  }, [visible, fullscreen, viewportHeight, refit]);
 
   const handleFiles = useCallback(
     async (files: File[]): Promise<void> => {
@@ -460,7 +516,9 @@ function TerminalPane({
           />
         </Box>
       )}
-      <Box ref={holderRef} sx={{ flexGrow: 1, minHeight: 320, overflow: 'hidden' }} />
+      {/* minHeight 0 overrides the flex default of auto, so the open keyboard shrinks the
+          terminal instead of pushing the key toolbar off the bottom. */}
+      <Box ref={holderRef} sx={{ flexGrow: 1, minHeight: 0, overflow: 'hidden' }} />
       <Box
         sx={{
           display: 'flex',
@@ -564,6 +622,33 @@ export function SandboxTerminal({
   const [killing, setKilling] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const [viewport, setViewport] = useState<{ height: number; top: number } | null>(null);
+
+  // `position: fixed` sizes to the layout viewport, which the phone keyboard does not shrink, so
+  // the key toolbar and the prompt slide underneath it. The visual viewport is the real one.
+  useEffect(() => {
+    const visual = window.visualViewport;
+    if (!fullscreen || !visual) {
+      setViewport(null);
+      return undefined;
+    }
+    let frame = 0;
+    const update = (): void => {
+      // The keyboard animation fires a resize per frame; one update per frame is plenty.
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() =>
+        setViewport({ height: visual.height, top: visual.offsetTop })
+      );
+    };
+    update();
+    visual.addEventListener('resize', update);
+    visual.addEventListener('scroll', update);
+    return () => {
+      cancelAnimationFrame(frame);
+      visual.removeEventListener('resize', update);
+      visual.removeEventListener('scroll', update);
+    };
+  }, [fullscreen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -625,10 +710,12 @@ export function SandboxTerminal({
         ...(fullscreen
           ? {
               position: 'fixed',
-              inset: 0,
               zIndex: theme => theme.zIndex.modal,
               bgcolor: 'background.paper',
               overflow: 'hidden',
+              ...(viewport
+                ? { left: 0, right: 0, top: viewport.top, height: viewport.height }
+                : { inset: 0 }),
             }
           : { height: 560 }),
       }}
@@ -747,6 +834,7 @@ export function SandboxTerminal({
             workspace={workspace}
             visible={session === active}
             fullscreen={fullscreen}
+            viewportHeight={viewport?.height ?? null}
           />
         ))
       )}

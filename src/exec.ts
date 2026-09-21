@@ -107,3 +107,14 @@ export function attachCommand(session: string): string[] {
 export function killSessionCommand(session: string): string[] {
   return ['tmux', 'kill-session', '-t', session];
 }
+
+// SGR wheel reports (CSI < 64|65 ; col ; row M), byte-identical to what xterm emits for a desktop
+// wheel. Tracking mode and encoding are separate modes and tmux's `mouse on` turns on both.
+// Cell 1;1 means tmux scrolls its top-left pane, not whichever one is under the finger.
+export const WHEEL_UP = '\x1b[<64;1;1M';
+export const WHEEL_DOWN = '\x1b[<65;1;1M';
+
+/** Whole scroll steps from an accumulated touch drag, truncated toward zero so the rest carries. */
+export function scrollSteps(pixels: number, rowHeight: number): number {
+  return rowHeight > 0 ? Math.trunc(pixels / rowHeight) : 0;
+}

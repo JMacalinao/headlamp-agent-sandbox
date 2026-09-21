@@ -17,6 +17,9 @@ import {
   LIST_SESSIONS_COMMAND,
   attachCommand,
   killSessionCommand,
+  scrollSteps,
+  WHEEL_UP,
+  WHEEL_DOWN,
 } from '../src/exec.ts';
 
 test('frame/unframe round-trip with a 0 byte and multi-byte UTF-8', () => {
@@ -189,4 +192,23 @@ test('attachCommand always opens a bare session', () => {
 
 test('killSessionCommand', () => {
   assert.deepEqual(killSessionCommand('mysession'), ['tmux', 'kill-session', '-t', 'mysession']);
+});
+
+test('scrollSteps truncates toward zero in both directions', () => {
+  assert.equal(scrollSteps(41, 17), 2);
+  assert.equal(scrollSteps(-41, 17), -2);
+  assert.equal(scrollSteps(16, 17), 0);
+  // Math.trunc keeps the sign of zero; the caller's `steps === 0` is true for -0 either way.
+  assert.equal(scrollSteps(-16, 17), -0);
+});
+
+test('scrollSteps yields 0 for an unmeasurable row height', () => {
+  assert.equal(scrollSteps(100, 0), 0);
+  assert.equal(scrollSteps(100, NaN), 0);
+  assert.equal(scrollSteps(100, -17), 0);
+});
+
+test('wheel sequences are SGR button 64 and 65 press reports', () => {
+  assert.equal(WHEEL_UP, '\u001b[<64;1;1M');
+  assert.equal(WHEEL_DOWN, '\u001b[<65;1;1M');
 });

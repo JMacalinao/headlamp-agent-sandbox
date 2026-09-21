@@ -105,7 +105,7 @@ spec:
   initContainers:
     - name: headlamp-agent-sandbox
       image: <registry>/<owner>/headlamp-agent-sandbox:<tag>
-      command: ["cp", "-a", "/plugin/.", "/headlamp/plugins/"]
+      command: ['cp', '-a', '/plugin/.', '/headlamp/plugins/']
       volumeMounts:
         - name: headlamp-plugins
           mountPath: /headlamp/plugins

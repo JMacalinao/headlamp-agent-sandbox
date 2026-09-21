@@ -489,7 +489,10 @@ function TerminalPane({
       sx={{
         display: visible ? 'flex' : 'none',
         flexDirection: 'column',
-        height: '100%',
+        // flex, not height 100%: that resolves against the whole container, so the tab bar above
+        // pushed the pane's bottom — the key toolbar — past the fullscreen overflow and clipped it.
+        flex: 1,
+        minHeight: 0,
         position: 'relative',
       }}
       onDragOver={event => {

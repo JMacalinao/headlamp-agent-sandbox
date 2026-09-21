@@ -518,7 +518,20 @@ function TerminalPane({
       )}
       {/* minHeight 0 overrides the flex default of auto, so the open keyboard shrinks the
           terminal instead of pushing the key toolbar off the bottom. */}
-      <Box ref={holderRef} sx={{ flexGrow: 1, minHeight: 0, overflow: 'hidden' }} />
+      <Box
+        ref={holderRef}
+        // touchAction none is what makes the drag ours: without it the browser starts its own
+        // pan first and then ignores preventDefault for the rest of the gesture, so the page
+        // scrolls and Android's pull-to-refresh fires. overscrollBehavior stops what is left
+        // from chaining to the page.
+        sx={{
+          flexGrow: 1,
+          minHeight: 0,
+          overflow: 'hidden',
+          touchAction: 'none',
+          overscrollBehavior: 'contain',
+        }}
+      />
       <Box
         sx={{
           display: 'flex',
@@ -713,6 +726,8 @@ export function SandboxTerminal({
               zIndex: theme => theme.zIndex.modal,
               bgcolor: 'background.paper',
               overflow: 'hidden',
+              // A fixed overlay still chains its overscroll to the page behind it.
+              overscrollBehavior: 'contain',
               ...(viewport
                 ? { left: 0, right: 0, top: viewport.top, height: viewport.height }
                 : { inset: 0 }),

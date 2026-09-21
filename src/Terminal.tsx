@@ -323,6 +323,10 @@ function TerminalPane({
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let retryOnForeground = false;
 
+    let hoveredUri: string | null = null;
+    const withCtrl = (event: MouseEvent): boolean =>
+      event.ctrlKey || event.metaKey || ctrlArmedRef.current;
+
     const term = new XTerm({
       fontSize: 13,
       cursorBlink: true,
@@ -331,14 +335,30 @@ function TerminalPane({
       // Plain click stays a tmux click; Ctrl/Cmd or the sticky Ctrl key opens the link.
       linkHandler: {
         activate: (event, uri) => {
-          if (!event.ctrlKey && !event.metaKey && !ctrlArmedRef.current) {
+          if (event.button !== 0 || !withCtrl(event)) {
             return;
           }
           armCtrl(false);
           window.open(uri, '_blank', 'noopener');
         },
+        hover: (_event, uri) => {
+          hoveredUri = uri;
+        },
+        leave: () => {
+          hoveredUri = null;
+        },
       },
     });
+
+    // Ctrl/Cmd + right-click copies the hovered link. Plain right-click is left to tmux's menu.
+    const onContextMenu = (event: MouseEvent): void => {
+      if (hoveredUri === null || !withCtrl(event)) {
+        return;
+      }
+      event.preventDefault();
+      armCtrl(false);
+      void navigator.clipboard.writeText(hoveredUri);
+    };
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(holder);
@@ -508,6 +528,7 @@ function TerminalPane({
       }
     };
 
+    holder.addEventListener('contextmenu', onContextMenu);
     holder.addEventListener('touchstart', onTouchStart, { passive: true });
     holder.addEventListener('touchmove', onTouchMove, { passive: false });
 
@@ -519,6 +540,7 @@ function TerminalPane({
       }
       document.removeEventListener('visibilitychange', onVisibility);
       observer.disconnect();
+      holder.removeEventListener('contextmenu', onContextMenu);
       holder.removeEventListener('touchstart', onTouchStart);
       holder.removeEventListener('touchmove', onTouchMove);
       typing.dispose();

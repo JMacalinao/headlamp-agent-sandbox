@@ -20,7 +20,8 @@ you can run more than one thing in a sandbox at once.
 The terminal also accepts dropped files and pasted screenshots, which get
 uploaded into the sandbox and typed into the agent's prompt as a path.
 Hyperlinks in the output open in a new tab on `Ctrl`+click (`Cmd`+click on a
-Mac, or the sticky `Ctrl` key then a tap); a plain click stays a tmux click.
+Mac, or the sticky `Ctrl` key then a tap) and copy to the clipboard on
+`Ctrl`+right-click; a plain click stays a tmux click.
 
 Because a phone is a first-class way to drive this, each terminal carries a row
 of keys a touch keyboard does not have — `Esc`, `Tab`, `Ctrl-C`, the arrows,

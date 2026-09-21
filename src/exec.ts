@@ -118,3 +118,18 @@ export const WHEEL_DOWN = '\x1b[<65;1;1M';
 export function scrollSteps(pixels: number, rowHeight: number): number {
   return rowHeight > 0 ? Math.trunc(pixels / rowHeight) : 0;
 }
+
+// A desktop horizontal scrollbar also leaves innerHeight above visualViewport.height, hence the
+// floor. Android configurations that resize the layout viewport instead report ~0 here, which is
+// correct: the toolbar is already above the keyboard and needs no pinning.
+const KEYBOARD_MIN_PX = 140;
+
+/** How much of the layout viewport the on-screen keyboard covers, or 0 when no keyboard is up. */
+export function keyboardInset(
+  innerHeight: number,
+  visualHeight: number,
+  visualTop: number
+): number {
+  const inset = innerHeight - (visualTop + visualHeight);
+  return inset >= KEYBOARD_MIN_PX ? inset : 0;
+}

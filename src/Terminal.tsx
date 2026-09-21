@@ -17,6 +17,7 @@ import {
   MenuItem,
   Tab,
   Tabs,
+  type Theme,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -33,6 +34,7 @@ import {
   chunkBase64,
   frameResize,
   frameText,
+  keyboardInset,
   killSessionCommand,
   LIST_SESSIONS_COMMAND,
   parseStatus,
@@ -210,6 +212,8 @@ interface TerminalPaneProps {
   fullscreen: boolean;
   /** Only a refit trigger: the pane is sized by its parent, not by this number. */
   viewportHeight: number | null;
+  /** Pixels above the layout viewport's bottom to pin the key toolbar; 0 leaves it in flow. */
+  pinBottom: number;
 }
 
 function TerminalPane({
@@ -221,6 +225,7 @@ function TerminalPane({
   visible,
   fullscreen,
   viewportHeight,
+  pinBottom,
 }: TerminalPaneProps): React.ReactNode {
   const holderRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
@@ -475,6 +480,10 @@ function TerminalPane({
     [pod, container, workspace, send]
   );
 
+  // A hidden pane is `display: none`, so its fixed children never paint either; gating on
+  // `visible` says so outright instead of leaving two stacked toolbars to that detail.
+  const pinned = pinBottom > 0 && visible && !fullscreen;
+
   return (
     <Box
       sx={{
@@ -532,6 +541,8 @@ function TerminalPane({
           overscrollBehavior: 'contain',
         }}
       />
+      {/* Pinned, it floats over the page instead of reserving a spacer: the pane's height is
+          fixed, so nothing below it moves, and the holder regrowing refits via the observer. */}
       <Box
         sx={{
           display: 'flex',
@@ -541,6 +552,15 @@ function TerminalPane({
           overflowX: 'auto',
           borderTop: 1,
           borderColor: 'divider',
+          ...(pinned && {
+            position: 'fixed',
+            left: 0,
+            right: 0,
+            bottom: `${pinBottom}px`,
+            // Clears Headlamp's app bar; stays under the fullscreen overlay's modal layer.
+            zIndex: (theme: Theme) => theme.zIndex.drawer,
+            bgcolor: 'background.paper',
+          }),
         }}
       >
         <Button
@@ -635,14 +655,18 @@ export function SandboxTerminal({
   const [killing, setKilling] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
-  const [viewport, setViewport] = useState<{ height: number; top: number } | null>(null);
+  const [viewport, setViewport] = useState<{
+    height: number;
+    top: number;
+    keyboard: number;
+  } | null>(null);
 
   // `position: fixed` sizes to the layout viewport, which the phone keyboard does not shrink, so
-  // the key toolbar and the prompt slide underneath it. The visual viewport is the real one.
+  // the key toolbar and the prompt slide underneath it. The visual viewport is the real one, and
+  // the keyboard opens in either mode, so this tracks it whether or not we are fullscreen.
   useEffect(() => {
     const visual = window.visualViewport;
-    if (!fullscreen || !visual) {
-      setViewport(null);
+    if (!visual) {
       return undefined;
     }
     let frame = 0;
@@ -650,7 +674,11 @@ export function SandboxTerminal({
       // The keyboard animation fires a resize per frame; one update per frame is plenty.
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() =>
-        setViewport({ height: visual.height, top: visual.offsetTop })
+        setViewport({
+          height: visual.height,
+          top: visual.offsetTop,
+          keyboard: keyboardInset(window.innerHeight, visual.height, visual.offsetTop),
+        })
       );
     };
     update();
@@ -661,7 +689,7 @@ export function SandboxTerminal({
       visual.removeEventListener('resize', update);
       visual.removeEventListener('scroll', update);
     };
-  }, [fullscreen]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -849,7 +877,10 @@ export function SandboxTerminal({
             workspace={workspace}
             visible={session === active}
             fullscreen={fullscreen}
-            viewportHeight={viewport?.height ?? null}
+            // Only fullscreen sizes the pane to the viewport; in the in-page box a viewport
+            // change moves nothing, and refitting there would steal focus back on every scroll.
+            viewportHeight={fullscreen ? viewport?.height ?? null : null}
+            pinBottom={viewport?.keyboard ?? 0}
           />
         ))
       )}

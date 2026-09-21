@@ -18,6 +18,7 @@ import {
   attachCommand,
   killSessionCommand,
   scrollSteps,
+  keyboardInset,
   WHEEL_UP,
   WHEEL_DOWN,
 } from '../src/exec.ts';
@@ -211,4 +212,15 @@ test('scrollSteps yields 0 for an unmeasurable row height', () => {
 test('wheel sequences are SGR button 64 and 65 press reports', () => {
   assert.equal(WHEEL_UP, '\u001b[<64;1;1M');
   assert.equal(WHEEL_DOWN, '\u001b[<65;1;1M');
+});
+
+test('keyboardInset reports what the keyboard covers and ignores everything smaller', () => {
+  assert.equal(keyboardInset(800, 800, 0), 0);
+  // A desktop horizontal scrollbar, not a keyboard.
+  assert.equal(keyboardInset(800, 785, 0), 0);
+  assert.equal(keyboardInset(800, 460, 0), 340);
+  // Android resized the layout viewport instead, so nothing needs pinning.
+  assert.equal(keyboardInset(460, 460, 0), 0);
+  // The visual viewport scrolled down inside the layout viewport.
+  assert.equal(keyboardInset(800, 460, 60), 280);
 });

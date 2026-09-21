@@ -27,8 +27,9 @@ next key you press, a button that expands the terminal to fill the viewport, and
 an upload button for the case where pasting a file is not practical. Tapping any
 of them leaves the terminal focused, so the on-screen keyboard stays up.
 Dragging on the terminal scrolls back through tmux's history, which a touch
-screen otherwise has no gesture for, and fullscreen follows the visual viewport
-so the key row stays above the on-screen keyboard rather than under it.
+screen otherwise has no gesture for, and the key row follows the visual
+viewport: fullscreen sizes itself to it, and in the page the row pins itself
+just above the on-screen keyboard rather than hiding under it.
 
 Launching an agent types its name into the session's shell rather than handing it
 to `tmux` as the session's command. That means the shell's own startup files

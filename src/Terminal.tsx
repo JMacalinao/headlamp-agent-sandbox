@@ -844,7 +844,6 @@ export function SandboxTerminal({
   const [commands, setCommands] = useState<Record<string, string | undefined>>({});
   const [active, setActive] = useState('');
   const [addAnchor, setAddAnchor] = useState<HTMLElement | null>(null);
-  const [menu, setMenu] = useState<{ anchor: HTMLElement; session: string } | null>(null);
   const [killing, setKilling] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   // On a phone the in-page box sits below the fold; the viewport-sized overlay is the usable one.
@@ -903,14 +902,6 @@ export function SandboxTerminal({
     };
   }, [pod, container]);
 
-  function closeTab(session: string): void {
-    const remaining = (sessions ?? []).filter(name => name !== session);
-    setSessions(remaining);
-    if (active === session) {
-      setActive(remaining[0] ?? '');
-    }
-  }
-
   // `tmux new -A` silently attaches and drops the command argument if the name is taken, so the
   // name has to be chosen against what the pod has right now, not against the mount-time list.
   async function openSession(agent: AgentLauncher): Promise<void> {
@@ -932,7 +923,11 @@ export function SandboxTerminal({
     setKilling(null);
     const result = await runExec(pod, container, killSessionCommand(session));
     setListError(result.error);
-    closeTab(session);
+    const remaining = (sessions ?? []).filter(name => name !== session);
+    setSessions(remaining);
+    if (active === session) {
+      setActive(remaining[0] ?? '');
+    }
   }
 
   if (sessions === null) {
@@ -977,28 +972,18 @@ export function SandboxTerminal({
               label={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   {session}
-                  <Tooltip title="Close this tab; the session keeps running">
+                  <Tooltip title="Kill session">
                     <IconButton
                       size="small"
-                      aria-label={`Close the ${session} tab`}
+                      aria-label={`Kill the ${session} session`}
                       onClick={event => {
                         event.stopPropagation();
-                        closeTab(session);
+                        setKilling(session);
                       }}
                     >
                       <Icon icon="mdi:close" width={14} />
                     </IconButton>
                   </Tooltip>
-                  <IconButton
-                    size="small"
-                    aria-label={`Actions for the ${session} session`}
-                    onClick={event => {
-                      event.stopPropagation();
-                      setMenu({ anchor: event.currentTarget, session });
-                    }}
-                  >
-                    <Icon icon="mdi:dots-vertical" width={14} />
-                  </IconButton>
                 </Box>
               }
             />
@@ -1025,17 +1010,6 @@ export function SandboxTerminal({
             {agent.label}
           </MenuItem>
         ))}
-      </Menu>
-
-      <Menu anchorEl={menu?.anchor} open={!!menu} onClose={() => setMenu(null)}>
-        <MenuItem
-          onClick={() => {
-            setKilling(menu?.session ?? null);
-            setMenu(null);
-          }}
-        >
-          Kill session
-        </MenuItem>
       </Menu>
 
       <Dialog open={!!killing} onClose={() => setKilling(null)}>

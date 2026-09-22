@@ -219,6 +219,8 @@ interface TerminalPaneProps {
   viewportHeight: number | null;
   /** Pixels above the layout viewport's bottom to pin the key toolbar; 0 leaves it in flow. */
   pinBottom: number;
+  /** Must be referentially stable: it is a dependency of the effect that owns the socket. */
+  onTitle: (session: string, title: string) => void;
 }
 
 function TerminalPane({
@@ -231,6 +233,7 @@ function TerminalPane({
   fullscreen,
   viewportHeight,
   pinBottom,
+  onTitle,
 }: TerminalPaneProps): React.ReactNode {
   const holderRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
@@ -490,6 +493,7 @@ function TerminalPane({
     connect(true);
 
     const typing = term.onData(sendKey);
+    const titling = term.onTitleChange(title => onTitle(session, title));
     // Copy on select, as terminals do: Ctrl+Shift+C is DevTools in Brave, and the Shift-forced
     // selection under tmux mouse mode does not survive the mouseup.
     const selecting = term.onSelectionChange(() => {
@@ -552,6 +556,7 @@ function TerminalPane({
       holder.removeEventListener('touchstart', onTouchStart);
       holder.removeEventListener('touchmove', onTouchMove);
       typing.dispose();
+      titling.dispose();
       selecting.dispose();
       streamRef.current?.cancel();
       uploadStreamRef.current?.cancel();
@@ -562,7 +567,7 @@ function TerminalPane({
       fitRef.current = null;
       fontAppliedRef.current = false;
     };
-  }, [pod, container, session, run, send, sendKey, refit, armShift, armCtrl]);
+  }, [pod, container, session, run, send, sendKey, refit, armShift, armCtrl, onTitle]);
 
   useEffect(() => {
     if (!visible) {
@@ -843,6 +848,7 @@ export function SandboxTerminal({
   const [sessions, setSessions] = useState<string[] | null>(null);
   const [commands, setCommands] = useState<Record<string, string | undefined>>({});
   const [active, setActive] = useState('');
+  const [titles, setTitles] = useState<Record<string, string | undefined>>({});
   const [addAnchor, setAddAnchor] = useState<HTMLElement | null>(null);
   const [killing, setKilling] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -884,6 +890,10 @@ export function SandboxTerminal({
       visual.removeEventListener('resize', update);
       visual.removeEventListener('scroll', update);
     };
+  }, []);
+
+  const onTitle = useCallback((session: string, title: string) => {
+    setTitles(current => ({ ...current, [session]: title }));
   }, []);
 
   useEffect(() => {
@@ -971,7 +981,7 @@ export function SandboxTerminal({
               sx={{ textTransform: 'none', minHeight: 40 }}
               label={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  {session}
+                  {titles[session] || session}
                   <Tooltip title="Kill session">
                     <IconButton
                       size="small"
@@ -1050,6 +1060,7 @@ export function SandboxTerminal({
             // change moves nothing, and refitting there would steal focus back on every scroll.
             viewportHeight={fullscreen ? viewport?.height ?? null : null}
             pinBottom={viewport?.keyboard ?? 0}
+            onTitle={onTitle}
           />
         ))
       )}

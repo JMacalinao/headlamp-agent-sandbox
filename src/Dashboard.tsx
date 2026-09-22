@@ -372,7 +372,7 @@ export function SandboxDetail(): ReactNode {
   return (
     <SectionBox title={sandbox.getName()} backLink={Router.createRouteURL('sandboxes')}>
       {actionError && <Alert severity="error">{actionError}</Alert>}
-      <Stack spacing={1} sx={{ mb: 2 }}>
+      <Stack spacing={1} sx={{ mb: 2, overflowWrap: 'anywhere' }}>
         <Typography>
           Ready: {status.ready ? 'yes' : 'no'} ({status.reason})
           {status.message ? ` - ${status.message}` : ''}

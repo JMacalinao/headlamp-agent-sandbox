@@ -847,7 +847,10 @@ export function SandboxTerminal({
   const [menu, setMenu] = useState<{ anchor: HTMLElement; session: string } | null>(null);
   const [killing, setKilling] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const [fullscreen, setFullscreen] = useState(false);
+  // On a phone the in-page box sits below the fold; the viewport-sized overlay is the usable one.
+  const [fullscreen, setFullscreen] = useState(
+    () => window.matchMedia?.('(pointer: coarse)').matches ?? false
+  );
   const [viewport, setViewport] = useState<{
     height: number;
     top: number;
@@ -1001,20 +1004,19 @@ export function SandboxTerminal({
             />
           ))}
         </Tabs>
-        <Button
-          size="small"
-          startIcon={<Icon icon="mdi:plus" />}
-          onClick={event => setAddAnchor(event.currentTarget)}
-        >
-          New session
-        </Button>
-        <Button
-          size="small"
-          startIcon={<Icon icon={fullscreen ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'} />}
-          onClick={() => setFullscreen(current => !current)}
-        >
-          {fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-        </Button>
+        <Tooltip title="New session">
+          <IconButton aria-label="New session" onClick={event => setAddAnchor(event.currentTarget)}>
+            <Icon icon="mdi:plus" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+          <IconButton
+            aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            onClick={() => setFullscreen(current => !current)}
+          >
+            <Icon icon={fullscreen ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'} />
+          </IconButton>
+        </Tooltip>
       </Box>
 
       <Menu anchorEl={addAnchor} open={!!addAnchor} onClose={() => setAddAnchor(null)}>

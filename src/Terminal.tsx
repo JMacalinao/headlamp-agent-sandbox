@@ -933,10 +933,11 @@ export function SandboxTerminal({
     setKilling(null);
     const result = await runExec(pod, container, killSessionCommand(session));
     setListError(result.error);
-    const remaining = (sessions ?? []).filter(name => name !== session);
+    const all = sessions ?? [];
+    const remaining = all.filter(name => name !== session);
     setSessions(remaining);
     if (active === session) {
-      setActive(remaining[0] ?? '');
+      setActive(remaining[Math.max(0, all.indexOf(session) - 1)] ?? '');
     }
   }
 

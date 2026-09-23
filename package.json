@@ -17,7 +17,8 @@
     "storybook-build": "headlamp-plugin storybook-build",
     "test": "headlamp-plugin test",
     "test:unit": "node --test 'test/*.test.js'",
-    "i18n": "headlamp-plugin i18n"
+    "i18n": "headlamp-plugin i18n",
+    "demo:build": "vite build --config demo/vite.config.mjs"
   },
   "keywords": [
     "headlamp",

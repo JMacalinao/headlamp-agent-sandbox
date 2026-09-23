@@ -331,7 +331,8 @@ function TerminalPane({
       event.ctrlKey || event.metaKey || ctrlArmedRef.current;
 
     const term = new XTerm({
-      fontSize: 13,
+      // 13 fits a phone's columns but reads small on a desktop monitor.
+      fontSize: window.matchMedia?.('(pointer: coarse)').matches ? 13 : 15,
       cursorBlink: true,
       scrollback: 10000,
       // Replaces xterm's native confirm(), which Brave silently dismisses after the first open.

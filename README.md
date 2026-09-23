@@ -38,9 +38,9 @@ your own Headlamp session and RBAC.
 
 ## Settings
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `namespace` | `agents` | Namespace the sandboxes live in. |
+| Setting        | Default         | Meaning                                                                                            |
+| -------------- | --------------- | -------------------------------------------------------------------------------------------------- |
+| `namespace`    | `agents`        | Namespace the sandboxes live in.                                                                   |
 | `templateName` | `agent-session` | `SandboxTemplate` that new sandboxes copy `spec.podTemplate` and `spec.volumeClaimTemplates` from. |
 
 The create dialog has no pod spec editor. The template stays owned by whatever
@@ -88,6 +88,17 @@ npm run lint
 
 The `Dockerfile` only copies `dist/`, so run `npm run build` before
 `docker build`.
+
+`demo/` renders the real terminal against a fake pod, with no cluster or
+Headlamp. It produced the screenshot above:
+
+```sh
+npm run demo:build
+(cd demo/dist && python3 -m http.server 8000) &
+node demo/screenshot.mjs 'http://127.0.0.1:8000/index.html?fullscreen' docs/fullscreen-terminal.png
+```
+
+The screenshot script needs `chromium` on the `PATH`.
 
 ## License
 

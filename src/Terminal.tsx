@@ -6,6 +6,7 @@ import {
   Alert,
   Box,
   Button,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -252,6 +253,8 @@ function TerminalPane({
   const [dragging, setDragging] = useState(false);
   const [upload, setUpload] = useState<{ name: string; sent: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Hides the fallback monospace, so the pane never visibly swaps fonts once the face loads.
+  const [fontApplied, setFontApplied] = useState(false);
 
   const send = useCallback((bytes: Uint8Array): void => {
     const socket = streamRef.current?.getSocket();
@@ -567,6 +570,7 @@ function TerminalPane({
       termRef.current = null;
       fitRef.current = null;
       fontAppliedRef.current = false;
+      setFontApplied(false);
     };
   }, [pod, container, session, run, send, sendKey, refit, armShift, armCtrl, onTitle]);
 
@@ -595,6 +599,7 @@ function TerminalPane({
         fontAppliedRef.current = true;
         term.options.fontFamily = TERMINAL_FONT;
         refit();
+        setFontApplied(true);
       })
       .catch((error: unknown) => {
         console.warn('Terminal font could not be applied.', error);
@@ -727,8 +732,23 @@ function TerminalPane({
           overflow: 'hidden',
           touchAction: 'none',
           overscrollBehavior: 'contain',
+          // opacity, not visibility: a hidden textarea refuses the focus the pane takes on show.
+          opacity: fontApplied ? 1 : 0,
         }}
       />
+      {!fontApplied && (
+        <CircularProgress
+          size={32}
+          sx={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            mt: -2,
+            ml: -2,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
       {/* Pinned, it floats over the page instead of reserving a spacer: the pane's height is
           fixed, so nothing below it moves, and the holder regrowing refits via the observer. */}
       <Box

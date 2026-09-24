@@ -5,6 +5,11 @@ const FAMILY = 'JetBrainsMono Nerd Font Mono';
 
 export const TERMINAL_FONT = `"${FAMILY}", monospace`;
 
+// The first family xterm gets, so it has to name the face already: a flag-emoji extension copies
+// xterm's first row stylesheet into an !important rule, and a fallback family there wins for good.
+// A different string from TERMINAL_FONT, since only an option change makes xterm re-measure the cell.
+export const TERMINAL_FONT_LOADING = `"${FAMILY}", ui-monospace, monospace`;
+
 let ready: Promise<void> | undefined;
 
 // Inlined rather than served: the plugin is one main.js and Headlamp gives it no stable URL

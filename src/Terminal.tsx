@@ -49,7 +49,7 @@ import {
   WHEEL_DOWN,
   WHEEL_UP,
 } from './exec';
-import { ensureTerminalFont, TERMINAL_FONT } from './font';
+import { ensureTerminalFont, TERMINAL_FONT, TERMINAL_FONT_LOADING } from './font';
 import { AgentLauncher, AGENTS } from './sandbox';
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -336,6 +336,7 @@ function TerminalPane({
     const term = new XTerm({
       // 13 fits a phone's columns but reads small on a desktop monitor.
       fontSize: window.matchMedia?.('(pointer: coarse)').matches ? 13 : 15,
+      fontFamily: TERMINAL_FONT_LOADING,
       cursorBlink: true,
       scrollback: 10000,
       // Replaces xterm's native confirm(), which Brave silently dismisses after the first open.

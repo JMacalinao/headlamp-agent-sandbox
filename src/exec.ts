@@ -96,7 +96,8 @@ export function uploadCommand(dir: string, file: string, b64len: number): string
 export const LIST_SESSIONS_COMMAND: string[] = [
   'sh',
   '-c',
-  'tmux list-sessions -F "#{session_name}" 2>/dev/null || true',
+  // An untitled pane reports the hostname; blank it so the tab falls back to the session name.
+  'tmux list-sessions -F "#{session_name}\t#{?#{==:#{pane_title},#{host}},,#{pane_title}}" 2>/dev/null || true',
 ];
 
 // -u: a client whose LC_CTYPE is not UTF-8 makes tmux draw every wide glyph as `_`.

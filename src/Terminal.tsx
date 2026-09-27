@@ -89,11 +89,15 @@ interface RunExecOptions {
   onStream?: (stream: ExecStream) => void;
 }
 
-function parseSessions(stdout: string): string[] {
-  return stdout
+function parseSessions(stdout: string): { names: string[]; titles: Record<string, string> } {
+  const rows = stdout
     .split('\n')
-    .map(line => line.trim())
-    .filter(Boolean);
+    .filter(line => line.trim())
+    .map(line => line.split('\t'));
+  return {
+    names: rows.map(([name]) => name.trim()),
+    titles: Object.fromEntries(rows.map(([name, title = '']) => [name.trim(), title.trim()])),
+  };
 }
 
 // connectCb means "about to connect": it runs before pod.exec() has even returned, and the
@@ -926,8 +930,9 @@ export function SandboxTerminal({
       if (cancelled) {
         return;
       }
-      const names = parseSessions(result.stdout);
+      const { names, titles } = parseSessions(result.stdout);
       setSessions(names);
+      setTitles(titles);
       setActive(names[0] ?? '');
       setListError(result.error);
     });
@@ -943,7 +948,7 @@ export function SandboxTerminal({
     const local = sessions ?? [];
     const result = await runExec(pod, container, LIST_SESSIONS_COMMAND);
     setListError(result.error);
-    const taken = new Set([...local, ...(result.error ? [] : parseSessions(result.stdout))]);
+    const taken = new Set([...local, ...(result.error ? [] : parseSessions(result.stdout).names)]);
     let name = agent.id;
     for (let suffix = 2; taken.has(name); suffix++) {
       name = `${agent.id}-${suffix}`;

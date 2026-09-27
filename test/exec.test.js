@@ -184,7 +184,7 @@ test('LIST_SESSIONS_COMMAND swallows the no-server-running failure', () => {
   assert.deepEqual(LIST_SESSIONS_COMMAND, [
     'sh',
     '-c',
-    'tmux list-sessions -F "#{session_name}" 2>/dev/null || true',
+    'tmux list-sessions -F "#{session_name}\t#{?#{==:#{pane_title},#{host}},,#{pane_title}}" 2>/dev/null || true',
   ]);
 });
 

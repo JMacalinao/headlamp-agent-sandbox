@@ -33,8 +33,10 @@ import {
   CH_STDIN,
   CH_STDOUT,
   chunkBase64,
+  CLIENT_PID_OSC,
   frameResize,
   frameText,
+  hangUpCommand,
   keyboardInset,
   killSessionCommand,
   LIST_SESSIONS_COMMAND,
@@ -332,6 +334,15 @@ function TerminalPane({
     // A status frame means the process exited on its own; only a close without one is a drop.
     let ended = false;
     let attempts = 0;
+    let clientPid: string | null = null;
+
+    // Closing the exec leaves its tmux client running under runsc, so hang it up explicitly.
+    const hangUp = (): void => {
+      if (clientPid !== null) {
+        void runExec(pod, container, hangUpCommand(clientPid));
+        clientPid = null;
+      }
+    };
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let retryOnForeground = false;
 
@@ -415,10 +426,18 @@ function TerminalPane({
       }
     };
 
+    term.parser.registerOscHandler(CLIENT_PID_OSC, data => {
+      if (/^\d+$/.test(data)) {
+        clientPid = data;
+      }
+      return true;
+    });
+
     // Exec'ing tmux directly means the process is tmux, not a login shell, so the image's rc
     // never runs its own `exec tmux new -A -s main` and each tab gets its own named session.
     // The same `new -A` is what makes a reconnect a plain reattach.
     const connect = (first: boolean): void => {
+      hangUp();
       const stream: ExecStream = pod.exec(container, onFrame, {
         command: attachCommand(session),
         tty: true,
@@ -571,6 +590,7 @@ function TerminalPane({
       typing.dispose();
       titling.dispose();
       selecting.dispose();
+      hangUp();
       streamRef.current?.cancel();
       uploadStreamRef.current?.cancel();
       uploadStreamRef.current = null;

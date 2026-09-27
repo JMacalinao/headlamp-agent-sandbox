@@ -16,6 +16,7 @@ import {
   uploadCommand,
   LIST_SESSIONS_COMMAND,
   attachCommand,
+  hangUpCommand,
   killSessionCommand,
   scrollSteps,
   keyboardInset,
@@ -191,7 +192,7 @@ test('LIST_SESSIONS_COMMAND swallows the no-server-running failure', () => {
 // The agent is typed into the session's shell, never passed here: tmux would exec the binary and
 // skip the image's rc, where `claude` is a shell function that gives it a unique socket path.
 test('attachCommand always opens a bare session and turns on title forwarding', () => {
-  const command = attachCommand('mysession');
+  const command = attachCommand('mysession').slice(4);
   assert.deepEqual(command.slice(0, 7), ['tmux', '-u', 'new', '-A', '-D', '-s', 'mysession']);
   assert.equal(command[7], ';');
   assert.deepEqual(command.slice(8), [
@@ -205,6 +206,16 @@ test('attachCommand always opens a bare session and turns on title forwarding', 
     'set-titles-string',
     '#T',
   ]);
+});
+
+test('attachCommand reports the client pid before exec-ing tmux', () => {
+  assert.deepEqual(attachCommand('mysession').slice(0, 4), [
+    'sh',
+    '-c',
+    `printf '\\033]7777;%s\\007' $$; exec "$@"`,
+    'sh',
+  ]);
+  assert.deepEqual(hangUpCommand('42'), ['kill', '-HUP', '42']);
 });
 
 test('killSessionCommand', () => {

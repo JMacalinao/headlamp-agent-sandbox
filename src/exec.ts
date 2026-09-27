@@ -102,10 +102,15 @@ export const LIST_SESSIONS_COMMAND: string[] = [
 
 // -u: a client whose LC_CTYPE is not UTF-8 makes tmux draw every wide glyph as `_`.
 // -D: runsc never hangs up an exec whose websocket dropped, so each attach detaches the orphans.
+// The client's pid goes out first as an OSC CLIENT_PID_OSC, so a pane can hang up its own client.
 // The trailing commands run once attached: with them tmux forwards the active pane's title
 // (what Claude Code sets) to the client as OSC 2, which is what names the tab.
 export function attachCommand(session: string): string[] {
   return [
+    'sh',
+    '-c',
+    `printf '\\033]${CLIENT_PID_OSC};%s\\007' $$; exec "$@"`,
+    'sh',
     'tmux',
     '-u',
     'new',
@@ -124,6 +129,12 @@ export function attachCommand(session: string): string[] {
     'set-titles-string',
     '#T',
   ];
+}
+
+export const CLIENT_PID_OSC = 7777;
+
+export function hangUpCommand(pid: string): string[] {
+  return ['kill', '-HUP', pid];
 }
 
 export function killSessionCommand(session: string): string[] {

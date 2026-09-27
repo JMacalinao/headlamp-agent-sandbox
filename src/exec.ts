@@ -100,6 +100,7 @@ export const LIST_SESSIONS_COMMAND: string[] = [
 ];
 
 // -u: a client whose LC_CTYPE is not UTF-8 makes tmux draw every wide glyph as `_`.
+// -D: runsc never hangs up an exec whose websocket dropped, so each attach detaches the orphans.
 // The trailing commands run once attached: with them tmux forwards the active pane's title
 // (what Claude Code sets) to the client as OSC 2, which is what names the tab.
 export function attachCommand(session: string): string[] {
@@ -108,6 +109,7 @@ export function attachCommand(session: string): string[] {
     '-u',
     'new',
     '-A',
+    '-D',
     '-s',
     session,
     ';',

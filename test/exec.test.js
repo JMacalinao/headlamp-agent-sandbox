@@ -192,9 +192,9 @@ test('LIST_SESSIONS_COMMAND swallows the no-server-running failure', () => {
 // skip the image's rc, where `claude` is a shell function that gives it a unique socket path.
 test('attachCommand always opens a bare session and turns on title forwarding', () => {
   const command = attachCommand('mysession');
-  assert.deepEqual(command.slice(0, 6), ['tmux', '-u', 'new', '-A', '-s', 'mysession']);
-  assert.equal(command[6], ';');
-  assert.deepEqual(command.slice(7), [
+  assert.deepEqual(command.slice(0, 7), ['tmux', '-u', 'new', '-A', '-D', '-s', 'mysession']);
+  assert.equal(command[7], ';');
+  assert.deepEqual(command.slice(8), [
     'set',
     '-g',
     'set-titles',

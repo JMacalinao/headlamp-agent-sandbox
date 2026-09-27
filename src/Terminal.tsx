@@ -213,8 +213,9 @@ interface TerminalPaneProps {
   container: string;
   session: string;
   run: string | undefined;
+  /** Clears `run`, so remounting the pane on a later tab switch does not type it again. */
+  onLaunched: (session: string) => void;
   workspace: string;
-  visible: boolean;
   fullscreen: boolean;
   /** Only a refit trigger: the pane is sized by its parent, not by this number. */
   viewportHeight: number | null;
@@ -229,14 +230,15 @@ function TerminalPane({
   container,
   session,
   run,
+  onLaunched,
   workspace,
-  visible,
   fullscreen,
   viewportHeight,
   pinBottom,
   onTitle,
 }: TerminalPaneProps): React.ReactNode {
   const holderRef = useRef<HTMLDivElement | null>(null);
+  const runRef = useRef(run);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const streamRef = useRef<ExecStream | null>(null);
@@ -440,8 +442,10 @@ function TerminalPane({
         socket.send(frameResize(term.cols, term.rows));
         // Typed into the shell rather than passed to tmux: tmux would exec the binary and skip the
         // image's rc, where `claude` is a function supplying the unique socket path it needs.
-        if (first && run !== undefined) {
-          socket.send(frameText(CH_STDIN, `${run}\n`));
+        if (first && runRef.current !== undefined) {
+          socket.send(frameText(CH_STDIN, `${runRef.current}\n`));
+          runRef.current = undefined;
+          onLaunched(session);
         }
         pendingRef.current.splice(0).forEach(bytes => socket.send(bytes));
       })();
@@ -573,22 +577,18 @@ function TerminalPane({
       fontAppliedRef.current = false;
       setFontApplied(false);
     };
-  }, [pod, container, session, run, send, sendKey, refit, armShift, armCtrl, onTitle]);
+  }, [pod, container, session, send, sendKey, refit, armShift, armCtrl, onTitle, onLaunched]);
 
   useEffect(() => {
-    if (!visible) {
-      return;
-    }
     refit();
     termRef.current?.focus();
     // fullscreen and the phone keyboard both resize the pane; without a refit the remote pty
     // keeps the old dimensions and the display corrupts.
-  }, [visible, fullscreen, viewportHeight, refit]);
+  }, [fullscreen, viewportHeight, refit]);
 
-  // Applied once the pane has a layout box: xterm re-measures the cell on the option change, and
-  // a display:none pane measures as zero and keeps the fallback metrics for good.
+  // Applied once the pane has a layout box: xterm re-measures the cell on the option change.
   useEffect(() => {
-    if (!visible || fontAppliedRef.current) {
+    if (fontAppliedRef.current) {
       return;
     }
     ensureTerminalFont()
@@ -606,7 +606,7 @@ function TerminalPane({
         console.warn('Terminal font could not be applied.', error);
       });
     // The term is recreated with the mount effect's inputs; the font has to follow it.
-  }, [visible, refit, pod, container, session, run]);
+  }, [refit, pod, container, session]);
 
   const handleFiles = useCallback(
     async (files: File[]): Promise<void> => {
@@ -671,14 +671,12 @@ function TerminalPane({
     [pod, container, workspace, send]
   );
 
-  // A hidden pane is `display: none`, so its fixed children never paint either; gating on
-  // `visible` says so outright instead of leaving two stacked toolbars to that detail.
-  const pinned = pinBottom > 0 && visible && !fullscreen;
+  const pinned = pinBottom > 0 && !fullscreen;
 
   return (
     <Box
       sx={{
-        display: visible ? 'flex' : 'none',
+        display: 'flex',
         flexDirection: 'column',
         // flex, not height 100%: that resolves against the whole container, so the tab bar above
         // pushed the pane's bottom — the key toolbar — past the fullscreen overflow and clipped it.
@@ -918,6 +916,10 @@ export function SandboxTerminal({
     setTitles(current => ({ ...current, [session]: title }));
   }, []);
 
+  const onLaunched = useCallback((session: string) => {
+    setCommands(current => ({ ...current, [session]: undefined }));
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     void runExec(pod, container, LIST_SESSIONS_COMMAND).then(result => {
@@ -1068,16 +1070,17 @@ export function SandboxTerminal({
           </Typography>
         </Box>
       ) : (
-        // Every pane stays mounted and hidden so switching tabs keeps the socket and scrollback.
-        sessions.map(session => (
+        // Only the active tab holds an exec: tmux keeps the scrollback, and every idle attach is
+        // a client tmux has to render to.
+        sessions.includes(active) && (
           <TerminalPane
-            key={session}
+            key={active}
             pod={pod}
             container={container}
-            session={session}
-            run={commands[session]}
+            session={active}
+            run={commands[active]}
+            onLaunched={onLaunched}
             workspace={workspace}
-            visible={session === active}
             fullscreen={fullscreen}
             // Only fullscreen sizes the pane to the viewport; in the in-page box a viewport
             // change moves nothing, and refitting there would steal focus back on every scroll.
@@ -1085,7 +1088,7 @@ export function SandboxTerminal({
             pinBottom={viewport?.keyboard ?? 0}
             onTitle={onTitle}
           />
-        ))
+        )
       )}
     </Box>
   );

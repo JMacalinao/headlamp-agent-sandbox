@@ -36,7 +36,7 @@ import {
   CLIENT_PID_OSC,
   frameResize,
   frameText,
-  hangUpCommand,
+  killClientCommand,
   keyboardInset,
   killSessionCommand,
   LIST_SESSIONS_COMMAND,
@@ -336,10 +336,10 @@ function TerminalPane({
     let attempts = 0;
     let clientPid: string | null = null;
 
-    // Closing the exec leaves its tmux client running under runsc, so hang it up explicitly.
-    const hangUp = (): void => {
+    // Closing the exec leaves its tmux client running under runsc, so kill it explicitly.
+    const killClient = (): void => {
       if (clientPid !== null) {
-        void runExec(pod, container, hangUpCommand(clientPid));
+        void runExec(pod, container, killClientCommand(clientPid));
         clientPid = null;
       }
     };
@@ -437,7 +437,7 @@ function TerminalPane({
     // never runs its own `exec tmux new -A -s main` and each tab gets its own named session.
     // The same `new -A` is what makes a reconnect a plain reattach.
     const connect = (first: boolean): void => {
-      hangUp();
+      killClient();
       const stream: ExecStream = pod.exec(container, onFrame, {
         command: attachCommand(session),
         tty: true,
@@ -590,7 +590,7 @@ function TerminalPane({
       typing.dispose();
       titling.dispose();
       selecting.dispose();
-      hangUp();
+      killClient();
       streamRef.current?.cancel();
       uploadStreamRef.current?.cancel();
       uploadStreamRef.current = null;

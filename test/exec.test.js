@@ -16,7 +16,7 @@ import {
   uploadCommand,
   LIST_SESSIONS_COMMAND,
   attachCommand,
-  hangUpCommand,
+  killClientCommand,
   killSessionCommand,
   scrollSteps,
   keyboardInset,
@@ -215,7 +215,7 @@ test('attachCommand reports the client pid before exec-ing tmux', () => {
     `printf '\\033]7777;%s\\007' $$; exec "$@"`,
     'sh',
   ]);
-  assert.deepEqual(hangUpCommand('42'), ['kill', '-HUP', '42']);
+  assert.deepEqual(killClientCommand('42'), ['sh', '-c', 'kill -KILL "$1"', 'sh', '42']);
 });
 
 test('killSessionCommand', () => {

@@ -102,6 +102,28 @@ function parseSessions(stdout: string): { names: string[]; titles: Record<string
   };
 }
 
+// Keyed by pod name, which the controller reuses for the sandbox's replacement pod.
+function activeTabKey(pod: Pod): string {
+  return `headlamp-agent-sandbox.active-tab.${pod.metadata?.namespace}/${pod.metadata?.name}`;
+}
+
+// Storage can be missing or throw (private windows, blocked site data); the tab is a convenience.
+function readActiveTab(pod: Pod): string | null {
+  try {
+    return localStorage.getItem(activeTabKey(pod));
+  } catch {
+    return null;
+  }
+}
+
+function writeActiveTab(pod: Pod, session: string): void {
+  try {
+    localStorage.setItem(activeTabKey(pod), session);
+  } catch {
+    // Not remembering the tab is harmless.
+  }
+}
+
 // connectCb means "about to connect": it runs before pod.exec() has even returned, and the
 // socket only exists once the connection promise resolves. Waiting for it is the only way in.
 async function waitForOpenSocket(
@@ -953,7 +975,8 @@ export function SandboxTerminal({
       const { names, titles } = parseSessions(result.stdout);
       setSessions(names);
       setTitles(titles);
-      setActive(names[0] ?? '');
+      const saved = readActiveTab(pod);
+      setActive(saved !== null && names.includes(saved) ? saved : names[0] ?? '');
       setListError(result.error);
     });
     return () => {
@@ -977,6 +1000,12 @@ export function SandboxTerminal({
     setCommands(current => ({ ...current, [name]: agent.command }));
     setActive(name);
   }
+
+  useEffect(() => {
+    if (active) {
+      writeActiveTab(pod, active);
+    }
+  }, [pod, active]);
 
   async function killSession(session: string): Promise<void> {
     setKilling(null);

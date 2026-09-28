@@ -1,4 +1,4 @@
-import { Router } from '@kinvolk/headlamp-plugin/lib';
+import { K8s, Router } from '@kinvolk/headlamp-plugin/lib';
 import {
   Link,
   Loader,
@@ -28,14 +28,13 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useHistory, useParams } from 'react-router-dom';
 import {
   createSandbox,
   DEFAULT_CONFIG,
   deleteSandbox,
   expiry,
-  findPod,
   getConfigStore,
   isSuspended,
   nodeName,
@@ -307,41 +306,35 @@ function DeleteSandboxDialog({
   );
 }
 
+/**
+ * Watches the sandbox's pod, so a replacement pod shows up without a reload. `pod` only changes
+ * when the pod itself does: every watch event hands over a new object, and the terminal
+ * reconnects whenever its pod prop changes. `livePod` carries the current status.
+ */
+function useSandboxPod(
+  sandbox: KubeObject | null,
+  namespace: string
+): { pod: Pod | null; livePod: Pod | null } {
+  const selector: string | undefined = sandbox?.jsonData?.status?.selector;
+  const [pods] = K8s.ResourceClasses.Pod.useList({ namespace, labelSelector: selector });
+  const livePod = selector
+    ? pods?.find(item => item.status?.phase === 'Running') ?? pods?.[0] ?? null
+    : null;
+  const uid = livePod?.metadata.uid;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by uid on purpose, see above
+  const pod = useMemo(() => livePod, [uid]);
+  return { pod, livePod };
+}
+
 export function SandboxDetail(): ReactNode {
   const { name } = useParams<{ name: string }>();
   const history = useHistory();
   const { namespace } = usePluginConfig();
   const [sandbox, error] = Sandbox.useGet(name, namespace);
-  const [pod, setPod] = useState<Pod | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const selector: string | undefined = sandbox?.jsonData?.status?.selector;
-
-  useEffect(() => {
-    if (!sandbox) {
-      setPod(null);
-      return undefined;
-    }
-    let cancelled = false;
-    findPod(sandbox, namespace)
-      .then(found => {
-        // Watch updates hand us a new Sandbox object every time; keeping the previous Pod
-        // instance when it is the same pod is what stops the terminal from reconnecting.
-        if (!cancelled) {
-          setPod(current => (current?.metadata.uid === found?.metadata.uid ? current : found));
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPod(null);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-    // Deliberately not [sandbox]: a watch event replaces that object on every status heartbeat.
-  }, [selector, namespace]);
+  const { pod, livePod } = useSandboxPod(sandbox, namespace);
 
   if (error) {
     return (
@@ -358,7 +351,7 @@ export function SandboxDetail(): ReactNode {
   const status = readiness(sandbox);
   const expires = expiry(sandbox);
   const container = pod?.spec?.containers?.[0]?.name;
-  const podIsRunning = pod?.status?.phase === 'Running';
+  const podIsRunning = livePod?.status?.phase === 'Running';
 
   async function switchMode(mode: 'Running' | 'Suspended'): Promise<void> {
     setActionError(null);
@@ -415,12 +408,18 @@ export function SandboxDetail(): ReactNode {
       )}
       {!suspended && pod && container && !podIsRunning && (
         <Alert severity="info">
-          The sandbox pod is {pod.status?.phase ?? 'not running'}. The terminal opens once it is
+          The sandbox pod is {livePod?.status?.phase ?? 'not running'}. The terminal opens once it is
           running.
         </Alert>
       )}
       {!suspended && pod && container && podIsRunning && (
-        <SandboxTerminal pod={pod} container={container} namespace={namespace} />
+        // A replacement pod (after an eviction, say) has none of the old tmux sessions.
+        <SandboxTerminal
+          key={pod.metadata.uid}
+          pod={pod}
+          container={container}
+          namespace={namespace}
+        />
       )}
     </SectionBox>
   );

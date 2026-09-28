@@ -1,7 +1,6 @@
-import { ApiProxy, ConfigStore, K8s } from '@kinvolk/headlamp-plugin/lib';
+import { ApiProxy, ConfigStore } from '@kinvolk/headlamp-plugin/lib';
 import { makeCustomResourceClass } from '@kinvolk/headlamp-plugin/lib/Crd';
 import type { KubeObject, KubeObjectClass } from '@kinvolk/headlamp-plugin/lib/lib/k8s/KubeObject';
-import type Pod from '@kinvolk/headlamp-plugin/lib/lib/k8s/pod';
 
 const SANDBOX_API = '/apis/agents.x-k8s.io/v1beta1';
 const TEMPLATE_API = '/apis/extensions.agents.x-k8s.io/v1beta1';
@@ -76,23 +75,6 @@ export function sandboxImage(sandbox: KubeObject): string {
 
 export function nodeName(sandbox: KubeObject): string {
   return sandbox.jsonData?.status?.nodeName ?? '';
-}
-
-/** The controller names the pod independently of the sandbox, so status.selector is the only link. */
-export async function findPod(sandbox: KubeObject, namespace: string): Promise<Pod | null> {
-  const selector: string | undefined = sandbox.jsonData?.status?.selector;
-  if (!selector) {
-    return null;
-  }
-  const list = await ApiProxy.request(`/api/v1/namespaces/${namespace}/pods`, {}, true, true, {
-    labelSelector: selector,
-  });
-  const items: any[] = list?.items ?? [];
-  if (items.length === 0) {
-    return null;
-  }
-  const running = items.find(item => item.status?.phase === 'Running');
-  return new K8s.ResourceClasses.Pod(running ?? items[0]);
 }
 
 export interface CreateSandboxArgs {

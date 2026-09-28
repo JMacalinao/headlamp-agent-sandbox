@@ -1,4 +1,5 @@
-import { K8s, Router } from '@kinvolk/headlamp-plugin/lib';
+import { Icon } from '@iconify/react';
+import { Activity, K8s, Router, Utils } from '@kinvolk/headlamp-plugin/lib';
 import {
   ActionButton,
   DetailsGrid,
@@ -12,6 +13,7 @@ import type { KubeObject } from '@kinvolk/headlamp-plugin/lib/lib/k8s/KubeObject
 import type Pod from '@kinvolk/headlamp-plugin/lib/lib/k8s/pod';
 import {
   Alert,
+  Box,
   Button,
   Dialog,
   DialogActions,
@@ -25,6 +27,7 @@ import {
   Typography,
 } from '@mui/material';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { useSelector } from 'react-redux';
 import { useHistory, useParams } from 'react-router-dom';
 import {
   createSandbox,
@@ -172,6 +175,8 @@ function CreateSandboxDialog({
 export function SandboxList(): ReactNode {
   const { namespace, templateName } = usePluginConfig();
   const [sandboxes, error] = Sandbox.useList({ namespace });
+  // Headlamp's "open details in a drawer" setting, which its own resource links follow.
+  const drawerEnabled = useSelector((state: any) => !!state.drawerMode?.isDetailDrawerEnabled);
   const [creating, setCreating] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
@@ -208,7 +213,11 @@ export function SandboxList(): ReactNode {
             getValue: sandbox => sandbox.getName(),
             // The class's own details route is the generic custom resource page, not this plugin's.
             render: sandbox => (
-              <Link routeName="sandbox" params={{ name: sandbox.getName() }}>
+              <Link
+                routeName="sandbox"
+                params={{ name: sandbox.getName() }}
+                onClick={drawerEnabled ? () => openSandboxActivity(sandbox.getName()) : undefined}
+              >
                 {sandbox.getName()}
               </Link>
             ),
@@ -356,8 +365,37 @@ function TerminalSection({
   );
 }
 
+function activityId(name: string, cluster: string): string {
+  // Same shape as the id Headlamp gives its own resource drawers, so reopening focuses the tab.
+  return `detailsSandbox ${name}${cluster}`;
+}
+
+/** Opens the sandbox in the activity bar, the way Headlamp opens its own resources. */
+function openSandboxActivity(name: string): void {
+  const cluster = Utils.getCluster() ?? '';
+  Activity.launch({
+    id: activityId(name, cluster),
+    title: `Sandbox ${name}`,
+    hideTitleInHeader: true,
+    location: 'split-right',
+    cluster,
+    temporary: true,
+    // Headlamp pulls its drawer content up by the back link's height to hide it; so does this.
+    content: (
+      <Box sx={{ mt: '-70px' }}>
+        <SandboxDetails name={name} inActivity />
+      </Box>
+    ),
+    icon: <Icon icon="mdi:robot-outline" width="100%" height="100%" />,
+  });
+}
+
 export function SandboxDetail(): ReactNode {
   const { name } = useParams<{ name: string }>();
+  return <SandboxDetails name={name} />;
+}
+
+function SandboxDetails({ name, inActivity = false }: { name: string; inActivity?: boolean }): ReactNode {
   const history = useHistory();
   const { namespace } = usePluginConfig();
   const [deleting, setDeleting] = useState<KubeObject | null>(null);
@@ -444,7 +482,11 @@ export function SandboxDetail(): ReactNode {
         onClose={() => setDeleting(null)}
         onDeleted={() => {
           setDeleting(null);
-          history.push(Router.createRouteURL('sandboxes'));
+          if (inActivity) {
+            Activity.close(activityId(name, Utils.getCluster() ?? ''));
+          } else {
+            history.push(Router.createRouteURL('sandboxes'));
+          }
         }}
       />
     </>

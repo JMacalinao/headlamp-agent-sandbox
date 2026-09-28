@@ -16,6 +16,7 @@ import {
   LinearProgress,
   Menu,
   MenuItem,
+  Portal,
   Tab,
   Tabs,
   type Theme,
@@ -1023,127 +1024,137 @@ export function SandboxTerminal({
     return <Loader title="Looking for terminal sessions" />;
   }
 
+  // Headlamp's activity panels are their own stacking context, so a fixed overlay rendered in
+  // place still sits under the app bar and the activity bar; on the body it covers them.
+  // Toggling remounts the pane, which reattaches to tmux like a tab switch.
   return (
-    <Box
-      sx={{
-        display: 'flex',
-        flexDirection: 'column',
-        ...(fullscreen
-          ? {
-              position: 'fixed',
-              zIndex: theme => theme.zIndex.modal,
-              bgcolor: 'background.paper',
-              overflow: 'hidden',
-              // A fixed overlay still chains its overscroll to the page behind it.
-              overscrollBehavior: 'contain',
-              ...(viewport
-                ? { left: 0, right: 0, top: viewport.top, height: viewport.height }
-                : { inset: 0 }),
-            }
-          : { height: 560 }),
-      }}
-    >
-      {listError && <Alert severity="warning">{listError}</Alert>}
-      <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
-        <Tabs
-          value={active || false}
-          onChange={(_event, value: string) => setActive(value)}
-          variant="scrollable"
-          scrollButtons="auto"
-          sx={{ flexGrow: 1, minHeight: 40 }}
-        >
-          {sessions.map(session => (
-            <Tab
-              key={session}
-              value={session}
-              component="div"
-              sx={{ textTransform: 'none', minHeight: 40 }}
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  {titles[session] || session}
-                  <Tooltip title="Kill session">
-                    <IconButton
-                      size="small"
-                      aria-label={`Kill the ${session} session`}
-                      onClick={event => {
-                        event.stopPropagation();
-                        setKilling(session);
-                      }}
-                    >
-                      <Icon icon="mdi:close" width={14} />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
+    <Portal disablePortal={!fullscreen}>
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          ...(fullscreen
+            ? {
+                position: 'fixed',
+                zIndex: theme => theme.zIndex.modal,
+                bgcolor: 'background.paper',
+                overflow: 'hidden',
+                // A fixed overlay still chains its overscroll to the page behind it.
+                overscrollBehavior: 'contain',
+                ...(viewport
+                  ? { left: 0, right: 0, top: viewport.top, height: viewport.height }
+                  : { inset: 0 }),
               }
-            />
-          ))}
-        </Tabs>
-        <Tooltip title="New session">
-          <IconButton aria-label="New session" onClick={event => setAddAnchor(event.currentTarget)}>
-            <Icon icon="mdi:plus" />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
-          <IconButton
-            aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-            onClick={() => setFullscreen(current => !current)}
+            : { height: 560 }),
+        }}
+      >
+        {listError && <Alert severity="warning">{listError}</Alert>}
+        <Box
+          sx={{ display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}
+        >
+          <Tabs
+            value={active || false}
+            onChange={(_event, value: string) => setActive(value)}
+            variant="scrollable"
+            scrollButtons="auto"
+            sx={{ flexGrow: 1, minHeight: 40 }}
           >
-            <Icon icon={fullscreen ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'} />
-          </IconButton>
-        </Tooltip>
-      </Box>
-
-      <Menu anchorEl={addAnchor} open={!!addAnchor} onClose={() => setAddAnchor(null)}>
-        {AGENTS.map(agent => (
-          <MenuItem key={agent.id} onClick={() => void openSession(agent)}>
-            {agent.label}
-          </MenuItem>
-        ))}
-      </Menu>
-
-      <Dialog open={!!killing} onClose={() => setKilling(null)}>
-        <DialogTitle>Kill session {killing}?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            This terminates the agent running in the session and every process it started. Anything
-            it has not written to the workspace is lost.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setKilling(null)}>Cancel</Button>
-          <Button color="error" onClick={() => void killSession(killing as string)}>
-            Kill session
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {sessions.length === 0 ? (
-        <Box sx={{ p: 2 }}>
-          <Typography>
-            No terminal sessions yet. Use &ldquo;New session&rdquo; to start one.
-          </Typography>
+            {sessions.map(session => (
+              <Tab
+                key={session}
+                value={session}
+                component="div"
+                sx={{ textTransform: 'none', minHeight: 40 }}
+                label={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    {titles[session] || session}
+                    <Tooltip title="Kill session">
+                      <IconButton
+                        size="small"
+                        aria-label={`Kill the ${session} session`}
+                        onClick={event => {
+                          event.stopPropagation();
+                          setKilling(session);
+                        }}
+                      >
+                        <Icon icon="mdi:close" width={14} />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                }
+              />
+            ))}
+          </Tabs>
+          <Tooltip title="New session">
+            <IconButton
+              aria-label="New session"
+              onClick={event => setAddAnchor(event.currentTarget)}
+            >
+              <Icon icon="mdi:plus" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+            <IconButton
+              aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              onClick={() => setFullscreen(current => !current)}
+            >
+              <Icon icon={fullscreen ? 'mdi:fullscreen-exit' : 'mdi:fullscreen'} />
+            </IconButton>
+          </Tooltip>
         </Box>
-      ) : (
-        // Only the active tab holds an exec: tmux keeps the scrollback, and every idle attach is
-        // a client tmux has to render to.
-        sessions.includes(active) && (
-          <TerminalPane
-            key={active}
-            pod={pod}
-            container={container}
-            session={active}
-            run={commands[active]}
-            onLaunched={onLaunched}
-            workspace={workspace}
-            fullscreen={fullscreen}
-            // Only fullscreen sizes the pane to the viewport; in the in-page box a viewport
-            // change moves nothing, and refitting there would steal focus back on every scroll.
-            viewportHeight={fullscreen ? viewport?.height ?? null : null}
-            pinBottom={viewport?.keyboard ?? 0}
-            onTitle={onTitle}
-          />
-        )
-      )}
-    </Box>
+
+        <Menu anchorEl={addAnchor} open={!!addAnchor} onClose={() => setAddAnchor(null)}>
+          {AGENTS.map(agent => (
+            <MenuItem key={agent.id} onClick={() => void openSession(agent)}>
+              {agent.label}
+            </MenuItem>
+          ))}
+        </Menu>
+
+        <Dialog open={!!killing} onClose={() => setKilling(null)}>
+          <DialogTitle>Kill session {killing}?</DialogTitle>
+          <DialogContent>
+            <DialogContentText>
+              This terminates the agent running in the session and every process it started.
+              Anything it has not written to the workspace is lost.
+            </DialogContentText>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setKilling(null)}>Cancel</Button>
+            <Button color="error" onClick={() => void killSession(killing as string)}>
+              Kill session
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {sessions.length === 0 ? (
+          <Box sx={{ p: 2 }}>
+            <Typography>
+              No terminal sessions yet. Use &ldquo;New session&rdquo; to start one.
+            </Typography>
+          </Box>
+        ) : (
+          // Only the active tab holds an exec: tmux keeps the scrollback, and every idle attach is
+          // a client tmux has to render to.
+          sessions.includes(active) && (
+            <TerminalPane
+              key={active}
+              pod={pod}
+              container={container}
+              session={active}
+              run={commands[active]}
+              onLaunched={onLaunched}
+              workspace={workspace}
+              fullscreen={fullscreen}
+              // Only fullscreen sizes the pane to the viewport; in the in-page box a viewport
+              // change moves nothing, and refitting there would steal focus back on every scroll.
+              viewportHeight={fullscreen ? viewport?.height ?? null : null}
+              pinBottom={viewport?.keyboard ?? 0}
+              onTitle={onTitle}
+            />
+          )
+        )}
+      </Box>
+    </Portal>
   );
 }

@@ -4,7 +4,6 @@ import {
   ActionButton,
   DetailsGrid,
   EditButton,
-  Link,
   ResourceListView,
   SectionBox,
   StatusLabel,
@@ -20,6 +19,7 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
+  Link as MuiLink,
   MenuItem,
   Stack,
   TextField,
@@ -28,7 +28,7 @@ import {
 } from '@mui/material';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { useHistory, useParams } from 'react-router-dom';
+import { Link as RouterLink, useHistory, useParams } from 'react-router-dom';
 import {
   createSandbox,
   DEFAULT_CONFIG,
@@ -212,14 +212,20 @@ export function SandboxList(): ReactNode {
             label: 'Name',
             getValue: sandbox => sandbox.getName(),
             // The class's own details route is the generic custom resource page, not this plugin's.
+            // Headlamp's Link replaces any onClick with its own drawer handler, hence MUI's.
             render: sandbox => (
-              <Link
-                routeName="sandbox"
-                params={{ name: sandbox.getName() }}
-                onClick={drawerEnabled ? () => openSandboxActivity(sandbox.getName()) : undefined}
+              <MuiLink
+                component={RouterLink}
+                to={Router.createRouteURL('sandbox', { name: sandbox.getName() })}
+                onClick={(event: React.MouseEvent) => {
+                  if (drawerEnabled) {
+                    event.preventDefault();
+                    openSandboxActivity(sandbox.getName());
+                  }
+                }}
               >
                 {sandbox.getName()}
-              </Link>
+              </MuiLink>
             ),
           },
           {

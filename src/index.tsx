@@ -15,7 +15,9 @@
  */
 
 import {
+  DefaultDetailsViewSection,
   type PluginSettingsDetailsProps,
+  registerDetailsViewSectionsProcessor,
   registerPluginSettings,
   registerRoute,
   registerSidebarEntry,
@@ -53,6 +55,21 @@ registerRoute({
   name: 'sandbox',
   sidebar: 'sandbox-list',
   component: SandboxDetail,
+});
+
+// Sandboxes open in the activity bar and the sidebar leads back to the list, so Back is noise.
+registerDetailsViewSectionsProcessor(function dropSandboxBackLink(resource, sections) {
+  return resource?.kind === 'Sandbox'
+    ? sections.filter(
+        section =>
+          !(
+            section &&
+            typeof section === 'object' &&
+            'id' in section &&
+            section.id === DefaultDetailsViewSection.BACK_LINK
+          )
+      )
+    : sections;
 });
 
 function Settings({ data, onDataChange }: PluginSettingsDetailsProps): ReactNode {

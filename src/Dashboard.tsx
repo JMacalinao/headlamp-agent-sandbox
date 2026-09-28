@@ -12,7 +12,6 @@ import type { KubeObject } from '@kinvolk/headlamp-plugin/lib/lib/k8s/KubeObject
 import type Pod from '@kinvolk/headlamp-plugin/lib/lib/k8s/pod';
 import {
   Alert,
-  Box,
   Button,
   Dialog,
   DialogActions,
@@ -386,12 +385,7 @@ function openSandboxActivity(name: string): void {
     location: 'split-right',
     cluster,
     temporary: true,
-    // Headlamp pulls its drawer content up by the back link's height to hide it; so does this.
-    content: (
-      <Box sx={{ mt: '-70px' }}>
-        <SandboxDetails name={name} inActivity />
-      </Box>
-    ),
+    content: <SandboxDetails name={name} inActivity />,
     icon: <Icon icon="mdi:robot-outline" width="100%" height="100%" />,
   });
 }
@@ -401,7 +395,13 @@ export function SandboxDetail(): ReactNode {
   return <SandboxDetails name={name} />;
 }
 
-function SandboxDetails({ name, inActivity = false }: { name: string; inActivity?: boolean }): ReactNode {
+function SandboxDetails({
+  name,
+  inActivity = false,
+}: {
+  name: string;
+  inActivity?: boolean;
+}): ReactNode {
   const history = useHistory();
   const { namespace } = usePluginConfig();
   const [deleting, setDeleting] = useState<KubeObject | null>(null);
@@ -422,7 +422,6 @@ function SandboxDetails({ name, inActivity = false }: { name: string; inActivity
         resourceType={Sandbox}
         name={name}
         namespace={namespace}
-        backLink={Router.createRouteURL('sandboxes')}
         // The stock delete button skips the warning that the workspace volume goes with it.
         noDefaultActions
         actions={sandbox => {

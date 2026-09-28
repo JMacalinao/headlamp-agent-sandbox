@@ -1,17 +1,18 @@
 import { K8s, Router } from '@kinvolk/headlamp-plugin/lib';
 import {
+  ActionButton,
+  DetailsGrid,
+  EditButton,
   Link,
-  Loader,
+  ResourceListView,
   SectionBox,
-  SectionFilterHeader,
+  StatusLabel,
 } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import type { KubeObject } from '@kinvolk/headlamp-plugin/lib/lib/k8s/KubeObject';
 import type Pod from '@kinvolk/headlamp-plugin/lib/lib/k8s/pod';
 import {
   Alert,
-  Box,
   Button,
-  Chip,
   Dialog,
   DialogActions,
   DialogContent,
@@ -19,11 +20,6 @@ import {
   DialogTitle,
   MenuItem,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
   TextField,
   Tooltip,
   Typography,
@@ -82,20 +78,13 @@ function countdown(target: Date, now: Date): string {
   return `in ${minutes}m`;
 }
 
-function ReadyChip({ sandbox }: { sandbox: KubeObject }): ReactNode {
+function ReadyLabel({ sandbox }: { sandbox: KubeObject }): ReactNode {
   const { ready, reason, message } = readiness(sandbox);
   return (
     <Tooltip title={message || reason}>
-      <Box>
-        <Chip
-          size="small"
-          color={ready ? 'success' : 'default'}
-          label={ready ? 'Ready' : 'Not ready'}
-        />
-        <Typography variant="caption" display="block" color="text.secondary">
-          {reason}
-        </Typography>
-      </Box>
+      <StatusLabel status={ready ? 'success' : 'warning'}>
+        {ready ? 'Ready' : 'Not ready'} ({reason})
+      </StatusLabel>
     </Tooltip>
   );
 }
@@ -192,68 +181,67 @@ export function SandboxList(): ReactNode {
   }, []);
 
   return (
-    <SectionBox
-      title={
-        <SectionFilterHeader
-          title="Sandboxes"
-          noNamespaceFilter
-          actions={[
-            <Button key="create" variant="contained" onClick={() => setCreating(true)}>
-              Create sandbox
-            </Button>,
-          ]}
-        />
-      }
-    >
+    <>
       <CreateSandboxDialog
         open={creating}
         onClose={() => setCreating(false)}
         namespace={namespace}
         templateName={templateName}
       />
-      {error && <Alert severity="error">{error.message}</Alert>}
-      {!sandboxes && !error && <Loader title="Loading sandboxes" />}
-      {sandboxes && (
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Ready</TableCell>
-              <TableCell>Suspended</TableCell>
-              <TableCell>Age</TableCell>
-              <TableCell>Expiry</TableCell>
-              <TableCell>Node</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {sandboxes.map(sandbox => {
+      <ResourceListView
+        title="Sandboxes"
+        id="headlamp-agent-sandbox-sandboxes"
+        headerProps={{
+          noNamespaceFilter: true,
+          actions: [
+            <Button key="create" variant="contained" onClick={() => setCreating(true)}>
+              Create sandbox
+            </Button>,
+          ],
+        }}
+        data={sandboxes}
+        errors={error ? [error] : null}
+        columns={[
+          {
+            id: 'name',
+            label: 'Name',
+            getValue: sandbox => sandbox.getName(),
+            // The class's own details route is the generic custom resource page, not this plugin's.
+            render: sandbox => (
+              <Link routeName="sandbox" params={{ name: sandbox.getName() }}>
+                {sandbox.getName()}
+              </Link>
+            ),
+          },
+          {
+            id: 'ready',
+            label: 'Ready',
+            getValue: sandbox => readiness(sandbox).reason,
+            render: sandbox => <ReadyLabel sandbox={sandbox} />,
+          },
+          {
+            id: 'mode',
+            label: 'Operating mode',
+            getValue: sandbox => (isSuspended(sandbox) ? 'Suspended' : 'Running'),
+          },
+          {
+            id: 'expiry',
+            label: 'Expires',
+            getValue: sandbox => expiry(sandbox)?.getTime() ?? Number.MAX_SAFE_INTEGER,
+            render: sandbox => {
               const expires = expiry(sandbox);
-              return (
-                <TableRow key={sandbox.metadata.uid}>
-                  <TableCell>
-                    <Link routeName="sandbox" params={{ name: sandbox.getName() }}>
-                      {sandbox.getName()}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <ReadyChip sandbox={sandbox} />
-                  </TableCell>
-                  <TableCell>{isSuspended(sandbox) ? 'Yes' : 'No'}</TableCell>
-                  <TableCell>{sandbox.getAge()}</TableCell>
-                  <TableCell>{expires ? countdown(expires, now) : 'never'}</TableCell>
-                  <TableCell>{nodeName(sandbox) || '-'}</TableCell>
-                </TableRow>
-              );
-            })}
-            {sandboxes.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6}>No sandboxes in namespace {namespace}.</TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      )}
-    </SectionBox>
+              return expires ? countdown(expires, now) : 'never';
+            },
+          },
+          {
+            id: 'node',
+            label: 'Node',
+            getValue: sandbox => nodeName(sandbox) || '-',
+          },
+          'age',
+        ]}
+      />
+    </>
   );
 }
 
@@ -326,80 +314,23 @@ function useSandboxPod(
   return { pod, livePod };
 }
 
-export function SandboxDetail(): ReactNode {
-  const { name } = useParams<{ name: string }>();
-  const history = useHistory();
-  const { namespace } = usePluginConfig();
-  const [sandbox, error] = Sandbox.useGet(name, namespace);
-  const [deleting, setDeleting] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-
+function TerminalSection({
+  sandbox,
+  namespace,
+  actionError,
+}: {
+  sandbox: KubeObject;
+  namespace: string;
+  actionError: string | null;
+}): ReactNode {
   const { pod, livePod } = useSandboxPod(sandbox, namespace);
-
-  if (error) {
-    return (
-      <SectionBox title={name}>
-        <Alert severity="error">{error.message}</Alert>
-      </SectionBox>
-    );
-  }
-  if (!sandbox) {
-    return <Loader title={`Loading sandbox ${name}`} />;
-  }
-
   const suspended = isSuspended(sandbox);
-  const status = readiness(sandbox);
-  const expires = expiry(sandbox);
   const container = pod?.spec?.containers?.[0]?.name;
   const podIsRunning = livePod?.status?.phase === 'Running';
 
-  async function switchMode(mode: 'Running' | 'Suspended'): Promise<void> {
-    setActionError(null);
-    try {
-      await setOperatingMode(sandbox, mode);
-    } catch (err) {
-      setActionError((err as Error).message);
-    }
-  }
-
   return (
-    <SectionBox title={sandbox.getName()} backLink={Router.createRouteURL('sandboxes')}>
+    <SectionBox title="Terminal">
       {actionError && <Alert severity="error">{actionError}</Alert>}
-      <Stack spacing={1} sx={{ mb: 2, overflowWrap: 'anywhere' }}>
-        <Typography>
-          Ready: {status.ready ? 'yes' : 'no'} ({status.reason})
-          {status.message ? ` - ${status.message}` : ''}
-        </Typography>
-        <Typography>Operating mode: {suspended ? 'Suspended' : 'Running'}</Typography>
-        <Typography>Image: {sandboxImage(sandbox) || '-'}</Typography>
-        <Typography>Node: {pod?.spec?.nodeName || nodeName(sandbox) || '-'}</Typography>
-        <Typography>
-          Expires:{' '}
-          {expires ? `${expires.toLocaleString()} (${countdown(expires, new Date())})` : 'never'}
-        </Typography>
-      </Stack>
-
-      <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-        <Button
-          variant="outlined"
-          onClick={() => void switchMode(suspended ? 'Running' : 'Suspended')}
-        >
-          {suspended ? 'Resume' : 'Suspend'}
-        </Button>
-        <Button variant="outlined" color="error" onClick={() => setDeleting(true)}>
-          Delete
-        </Button>
-      </Stack>
-
-      <DeleteSandboxDialog
-        sandbox={deleting ? sandbox : null}
-        onClose={() => setDeleting(false)}
-        onDeleted={() => {
-          setDeleting(false);
-          history.push(Router.createRouteURL('sandboxes'));
-        }}
-      />
-
       {suspended && (
         <Alert severity="info">This sandbox is suspended. Resume it to open a terminal.</Alert>
       )}
@@ -408,8 +339,8 @@ export function SandboxDetail(): ReactNode {
       )}
       {!suspended && pod && container && !podIsRunning && (
         <Alert severity="info">
-          The sandbox pod is {livePod?.status?.phase ?? 'not running'}. The terminal opens once it is
-          running.
+          The sandbox pod is {livePod?.status?.phase ?? 'not running'}. The terminal opens once it
+          is running.
         </Alert>
       )}
       {!suspended && pod && container && podIsRunning && (
@@ -422,5 +353,101 @@ export function SandboxDetail(): ReactNode {
         />
       )}
     </SectionBox>
+  );
+}
+
+export function SandboxDetail(): ReactNode {
+  const { name } = useParams<{ name: string }>();
+  const history = useHistory();
+  const { namespace } = usePluginConfig();
+  const [deleting, setDeleting] = useState<KubeObject | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  async function switchMode(sandbox: KubeObject, mode: 'Running' | 'Suspended'): Promise<void> {
+    setActionError(null);
+    try {
+      await setOperatingMode(sandbox, mode);
+    } catch (err) {
+      setActionError((err as Error).message);
+    }
+  }
+
+  return (
+    <>
+      <DetailsGrid
+        resourceType={Sandbox}
+        name={name}
+        namespace={namespace}
+        backLink={Router.createRouteURL('sandboxes')}
+        withEvents
+        // The stock delete button skips the warning that the workspace volume goes with it.
+        noDefaultActions
+        actions={sandbox => {
+          if (!sandbox) {
+            return null;
+          }
+          const suspended = isSuspended(sandbox);
+          return [
+            <ActionButton
+              key="mode"
+              description={suspended ? 'Resume' : 'Suspend'}
+              icon={suspended ? 'mdi:play' : 'mdi:pause'}
+              onClick={() => void switchMode(sandbox, suspended ? 'Running' : 'Suspended')}
+            />,
+            <EditButton key="edit" item={sandbox} />,
+            <ActionButton
+              key="delete"
+              description="Delete"
+              icon="mdi:delete"
+              onClick={() => setDeleting(sandbox)}
+            />,
+          ];
+        }}
+        extraInfo={sandbox => {
+          if (!sandbox) {
+            return null;
+          }
+          const expires = expiry(sandbox);
+          return [
+            { name: 'Ready', value: <ReadyLabel sandbox={sandbox} /> },
+            { name: 'Operating mode', value: isSuspended(sandbox) ? 'Suspended' : 'Running' },
+            { name: 'Image', value: sandboxImage(sandbox) || '-' },
+            { name: 'Node', value: nodeName(sandbox) || '-' },
+            {
+              name: 'Expires',
+              value: expires
+                ? `${expires.toLocaleString()} (${countdown(expires, new Date())})`
+                : 'never',
+            },
+          ];
+        }}
+        // DetailsGrid keys sections by position. Nothing before this one comes and goes, so the
+        // terminal is not remounted, which would drop its exec.
+        extraSections={sandbox =>
+          sandbox
+            ? [
+                {
+                  id: 'headlamp-agent-sandbox.terminal',
+                  section: (
+                    <TerminalSection
+                      sandbox={sandbox}
+                      namespace={namespace}
+                      actionError={actionError}
+                    />
+                  ),
+                },
+              ]
+            : []
+        }
+      />
+      <DeleteSandboxDialog
+        sandbox={deleting}
+        onClose={() => setDeleting(null)}
+        onDeleted={() => {
+          setDeleting(null);
+          history.push(Router.createRouteURL('sandboxes'));
+        }}
+      />
+    </>
   );
 }

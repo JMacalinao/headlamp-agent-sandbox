@@ -379,7 +379,6 @@ export function SandboxDetail(): ReactNode {
         name={name}
         namespace={namespace}
         backLink={Router.createRouteURL('sandboxes')}
-        withEvents
         // The stock delete button skips the warning that the workspace volume goes with it.
         noDefaultActions
         actions={sandbox => {

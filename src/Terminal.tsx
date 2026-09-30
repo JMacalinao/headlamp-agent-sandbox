@@ -283,6 +283,21 @@ function TerminalPane({
   const [error, setError] = useState<string | null>(null);
   // Hides the fallback monospace, so the pane never visibly swaps fonts once the face loads.
   const [fontApplied, setFontApplied] = useState(false);
+  // xterm has no touch selection, so the screen is shown as page text for the phone's own.
+  const [screenText, setScreenText] = useState<string | null>(null);
+
+  const showScreen = useCallback((): void => {
+    const term = termRef.current;
+    if (!term) {
+      return;
+    }
+    const buffer = term.buffer.active;
+    const lines: string[] = [];
+    for (let row = 0; row < term.rows; row += 1) {
+      lines.push(buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? '');
+    }
+    setScreenText(lines.join('\n').trimEnd());
+  }, []);
 
   const send = useCallback((bytes: Uint8Array): void => {
     // Any other input can change the remote line under the IME's text, so the IME starts over.
@@ -901,6 +916,17 @@ function TerminalPane({
         >
           Upload
         </Button>
+        <Button
+          size="small"
+          variant="outlined"
+          sx={{ minWidth: 40, px: 1 }}
+          startIcon={<Icon icon="mdi:cursor-text" />}
+          onPointerDown={keepFocus}
+          onMouseDown={keepFocus}
+          onClick={showScreen}
+        >
+          Select
+        </Button>
         <input
           ref={fileRef}
           type="file"
@@ -917,6 +943,28 @@ function TerminalPane({
           }}
         />
       </Box>
+      <Dialog open={screenText !== null} onClose={() => setScreenText(null)} fullWidth>
+        <DialogContent>
+          <Box
+            component="pre"
+            sx={{
+              m: 0,
+              overflowX: 'auto',
+              userSelect: 'text',
+              fontFamily: TERMINAL_FONT,
+              fontSize: 13,
+            }}
+          >
+            {screenText}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => void navigator.clipboard.writeText(screenText ?? '')}>
+            Copy all
+          </Button>
+          <Button onClick={() => setScreenText(null)}>Close</Button>
+        </DialogActions>
+      </Dialog>
       {dragging && (
         <Box
           sx={{

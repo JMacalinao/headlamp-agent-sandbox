@@ -375,18 +375,20 @@ function TerminalPane({
     let hoveredUri: string | null = null;
     const withCtrl = (event: MouseEvent): boolean =>
       event.ctrlKey || event.metaKey || ctrlArmedRef.current;
+    const touch = window.matchMedia?.('(pointer: coarse)').matches ?? false;
 
     const term = new XTerm({
       // 13 fits a phone's columns but reads small on a desktop monitor.
-      fontSize: window.matchMedia?.('(pointer: coarse)').matches ? 13 : 15,
+      fontSize: touch ? 13 : 15,
       fontFamily: TERMINAL_FONT_LOADING,
       cursorBlink: true,
       scrollback: 10000,
       // Replaces xterm's native confirm(), which Brave silently dismisses after the first open.
-      // Plain click stays a tmux click; Ctrl/Cmd or the sticky Ctrl key opens the link.
+      // A tap opens the link on a phone. On a desktop a plain click stays a tmux click, and
+      // Ctrl/Cmd or the sticky Ctrl key opens the link.
       linkHandler: {
         activate: (event, uri) => {
-          if (event.button !== 0 || !withCtrl(event)) {
+          if (event.button !== 0 || !(touch || withCtrl(event))) {
             return;
           }
           armCtrl(false);

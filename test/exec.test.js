@@ -23,6 +23,7 @@ import {
   killSessionCommand,
   scrollSteps,
   keyboardInset,
+  retype,
   MAX_RECONNECTS,
   reconnectDelay,
   shifted,
@@ -328,4 +329,15 @@ test('reconnectDelay doubles from 1s and caps at 10s', () => {
     [1000, 1000, 2000, 4000, 8000, 10000, 10000]
   );
   assert.equal(MAX_RECONNECTS, 6);
+});
+
+test('retype erases back to the common prefix and types the rest', () => {
+  assert.equal(retype('', 'T'), 'T');
+  assert.equal(retype('Thi', 'This'), 's');
+  // A prediction that rewrites the word.
+  assert.equal(retype('Thi', 'That '), '\x7fat ');
+  assert.equal(retype('This', 'Thi'), '\x7f');
+  assert.equal(retype('same', 'same'), '');
+  // Code points, not UTF-16 units: one emoji is one DEL.
+  assert.equal(retype('a😀', 'a'), '\x7f');
 });

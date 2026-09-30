@@ -47,6 +47,7 @@ import {
   parseSessions,
   parseStatus,
   reconnectDelay,
+  retype,
   scrollSteps,
   SHIFT_ENTER,
   shifted,
@@ -429,6 +430,45 @@ function TerminalPane({
       return false;
     });
 
+    // xterm's own IME handling duplicates text around Gboard and Samsung predictions, so its
+    // textarea listeners are cut off here and each textarea change is sent as a retype instead.
+    const textarea = term.textarea;
+    let imeText = '';
+    const onImeEvent = (event: Event): void => {
+      if (event.target !== textarea || !textarea) {
+        return;
+      }
+      if (event instanceof KeyboardEvent && event.keyCode !== 229) {
+        // Real keys stay with xterm, which clears the textarea itself after Enter and Ctrl+C.
+        queueMicrotask(() => {
+          imeText = textarea.value;
+        });
+        return;
+      }
+      event.stopPropagation();
+      if (event.type !== 'input' && event.type !== 'compositionend') {
+        return;
+      }
+      const keys = retype(imeText, textarea.value);
+      imeText = textarea.value;
+      if (keys) {
+        sendKey(keys);
+      }
+      // Committed text is on the remote line now; an empty textarea keeps the next word's diff small.
+      if (event.type === 'compositionend' || !(event as InputEvent).isComposing) {
+        textarea.value = '';
+        imeText = '';
+      }
+    };
+    const IME_EVENTS = [
+      'keydown',
+      'compositionstart',
+      'compositionupdate',
+      'compositionend',
+      'input',
+    ];
+    IME_EVENTS.forEach(type => holder.addEventListener(type, onImeEvent, true));
+
     const onFrame = (data: any): void => {
       const { channel, payload } = unframe(data as ArrayBuffer);
       if (channel === CH_STDOUT || channel === CH_STDERR) {
@@ -603,6 +643,7 @@ function TerminalPane({
       holder.removeEventListener('contextmenu', onContextMenu);
       holder.removeEventListener('touchstart', onTouchStart);
       holder.removeEventListener('touchmove', onTouchMove);
+      IME_EVENTS.forEach(type => holder.removeEventListener(type, onImeEvent, true));
       typing.dispose();
       titling.dispose();
       selecting.dispose();

@@ -238,3 +238,14 @@ export function keyboardInset(
   const inset = innerHeight - (visualTop + visualHeight);
   return inset >= KEYBOARD_MIN_PX ? inset : 0;
 }
+
+/** The keys that turn the IME's `before` text into `after`: DELs back to the common prefix, then the rest. */
+export function retype(before: string, after: string): string {
+  const old = [...before];
+  const next = [...after];
+  let common = 0;
+  while (common < old.length && old[common] === next[common]) {
+    common += 1;
+  }
+  return '\x7f'.repeat(old.length - common) + next.slice(common).join('');
+}

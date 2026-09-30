@@ -272,6 +272,9 @@ function TerminalPane({
   const shiftArmedRef = useRef(false);
   const fontAppliedRef = useRef(false);
   const sizeRef = useRef({ cols: 0, rows: 0 });
+  // The IME's text since the last other input, kept in the textarea for next-word predictions.
+  const imeTextRef = useRef('');
+  const imeSendingRef = useRef(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [ctrlArmed, setCtrlArmed] = useState(false);
   const [shiftArmed, setShiftArmed] = useState(false);
@@ -282,6 +285,12 @@ function TerminalPane({
   const [fontApplied, setFontApplied] = useState(false);
 
   const send = useCallback((bytes: Uint8Array): void => {
+    // Any other input can change the remote line under the IME's text, so the IME starts over.
+    const textarea = termRef.current?.textarea;
+    if (!imeSendingRef.current && imeTextRef.current && textarea) {
+      textarea.value = '';
+      imeTextRef.current = '';
+    }
     const socket = streamRef.current?.getSocket();
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(bytes);
@@ -433,31 +442,24 @@ function TerminalPane({
     // xterm's own IME handling duplicates text around Gboard and Samsung predictions, so its
     // textarea listeners are cut off here and each textarea change is sent as a retype instead.
     const textarea = term.textarea;
-    let imeText = '';
+    imeTextRef.current = '';
     const onImeEvent = (event: Event): void => {
       if (event.target !== textarea || !textarea) {
         return;
       }
       if (event instanceof KeyboardEvent && event.keyCode !== 229) {
-        // Real keys stay with xterm, which clears the textarea itself after Enter and Ctrl+C.
-        queueMicrotask(() => {
-          imeText = textarea.value;
-        });
         return;
       }
       event.stopPropagation();
       if (event.type !== 'input' && event.type !== 'compositionend') {
         return;
       }
-      const keys = retype(imeText, textarea.value);
-      imeText = textarea.value;
+      const keys = retype(imeTextRef.current, textarea.value);
+      imeTextRef.current = textarea.value;
       if (keys) {
+        imeSendingRef.current = true;
         sendKey(keys);
-      }
-      // Committed text is on the remote line now; an empty textarea keeps the next word's diff small.
-      if (event.type === 'compositionend' || !(event as InputEvent).isComposing) {
-        textarea.value = '';
-        imeText = '';
+        imeSendingRef.current = false;
       }
     };
     const IME_EVENTS = [

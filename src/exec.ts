@@ -100,6 +100,40 @@ export const LIST_SESSIONS_COMMAND: string[] = [
   'tmux list-sessions -F "#{session_name}\t#{?#{==:#{pane_title},#{host}},,#{pane_title}}" 2>/dev/null || true',
 ];
 
+export function parseSessions(stdout: string): { names: string[]; titles: Record<string, string> } {
+  const rows = stdout
+    .split('\n')
+    .filter(line => line.trim())
+    .map(line => line.split('\t'));
+  return {
+    names: rows.map(([name]) => name.trim()),
+    titles: Object.fromEntries(rows.map(([name, title = '']) => [name.trim(), title.trim()])),
+  };
+}
+
+// Never drops a local tab: a new session is a tab before its attach makes tmux list it.
+// Returns `current` itself when nothing is added, so React skips the re-render.
+export function mergeSessions(
+  current: string[],
+  listed: string[],
+  killed: ReadonlySet<string>
+): string[] {
+  const added = listed.filter(name => !current.includes(name) && !killed.has(name));
+  return added.length ? [...current, ...added] : current;
+}
+
+// The active tab's title arrives live as OSC 2, so a list result never overwrites it.
+export function mergeTitles(
+  current: Record<string, string | undefined>,
+  listed: Record<string, string>,
+  active: string
+): Record<string, string | undefined> {
+  const filled = Object.entries(listed).filter(
+    ([name, title]) => title && !current[name] && name !== active
+  );
+  return filled.length ? { ...current, ...Object.fromEntries(filled) } : current;
+}
+
 // -u: a client whose LC_CTYPE is not UTF-8 makes tmux draw every wide glyph as `_`.
 // -D: runsc never hangs up an exec whose websocket dropped, so each attach detaches the orphans.
 // The client's pid goes out first as an OSC CLIENT_PID_OSC, so a pane can kill its own client.

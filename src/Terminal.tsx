@@ -42,6 +42,9 @@ import {
   killSessionCommand,
   LIST_SESSIONS_COMMAND,
   MAX_RECONNECTS,
+  mergeSessions,
+  mergeTitles,
+  parseSessions,
   parseStatus,
   reconnectDelay,
   scrollSteps,
@@ -56,6 +59,7 @@ import { ensureTerminalFont, TERMINAL_FONT, TERMINAL_FONT_LOADING } from './font
 import { AgentLauncher, AGENTS } from './sandbox';
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const SESSION_POLL_MS = 5000;
 
 const KEYS: { label: string; bytes: string }[] = [
   { label: 'Esc', bytes: '\x1b' },
@@ -90,17 +94,6 @@ interface RunExecOptions {
   /** Checked at every await, so a disposed caller stops the transfer. */
   isCancelled?: () => boolean;
   onStream?: (stream: ExecStream) => void;
-}
-
-function parseSessions(stdout: string): { names: string[]; titles: Record<string, string> } {
-  const rows = stdout
-    .split('\n')
-    .filter(line => line.trim())
-    .map(line => line.split('\t'));
-  return {
-    names: rows.map(([name]) => name.trim()),
-    titles: Object.fromEntries(rows.map(([name, title = '']) => [name.trim(), title.trim()])),
-  };
 }
 
 // Keyed by pod name, which the controller reuses for the sandbox's replacement pod.
@@ -919,6 +912,10 @@ export function SandboxTerminal({
   const [addAnchor, setAddAnchor] = useState<HTMLElement | null>(null);
   const [killing, setKilling] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const activeRef = useRef(active);
+  const killedRef = useRef(new Set<string>());
+  // The tab to reopen once it is listed, until the user picks one; nothing is saved meanwhile.
+  const savedTabRef = useRef(readActiveTab(pod));
   // On a phone the in-page box sits below the fold; the viewport-sized overlay is the usable one.
   const [fullscreen, setFullscreen] = useState(
     () => window.matchMedia?.('(pointer: coarse)').matches ?? false
@@ -967,26 +964,76 @@ export function SandboxTerminal({
     setCommands(current => ({ ...current, [session]: undefined }));
   }, []);
 
+  // tmux-resurrect restores a replacement pod's sessions well after this mounts, so keep listing.
   useEffect(() => {
     let cancelled = false;
-    void runExec(pod, container, LIST_SESSIONS_COMMAND).then(result => {
-      if (cancelled) {
+    let listing = false;
+    let first = true;
+    const refresh = (): void => {
+      if (listing) {
         return;
       }
-      const { names, titles } = parseSessions(result.stdout);
-      setSessions(names);
-      setTitles(titles);
-      const saved = readActiveTab(pod);
-      setActive(saved !== null && names.includes(saved) ? saved : names[0] ?? '');
-      setListError(result.error);
-    });
+      listing = true;
+      void runExec(pod, container, LIST_SESSIONS_COMMAND).then(result => {
+        listing = false;
+        if (cancelled) {
+          return;
+        }
+        // A later failure is left out so it cannot hide the error of a user action.
+        if (first) {
+          first = false;
+          setListError(result.error);
+        } else if (result.error) {
+          return;
+        }
+        const { names, titles: listed } = parseSessions(result.stdout);
+        setSessions(current => mergeSessions(current ?? [], names, killedRef.current));
+        setTitles(current => mergeTitles(current, listed, activeRef.current));
+      });
+    };
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'visible') {
+        refresh();
+      }
+    };
+    refresh();
+    const timer = setInterval(onVisibility, SESSION_POLL_MS);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       cancelled = true;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [pod, container]);
 
+  // Falls back to the first tab while the saved one is not restored yet, then moves to it once.
+  useEffect(() => {
+    if (!sessions?.length) {
+      return;
+    }
+    const saved = savedTabRef.current;
+    if (saved !== null && sessions.includes(saved)) {
+      savedTabRef.current = null;
+      setActive(saved);
+    } else if (!sessions.includes(active)) {
+      setActive(sessions[0]);
+    }
+  }, [sessions, active]);
+
+  useEffect(() => {
+    activeRef.current = active;
+    if (active && savedTabRef.current === null) {
+      writeActiveTab(pod, active);
+    }
+  }, [pod, active]);
+
+  function selectTab(session: string): void {
+    savedTabRef.current = null;
+    setActive(session);
+  }
+
   // `tmux new -A` silently attaches and drops the command argument if the name is taken, so the
-  // name has to be chosen against what the pod has right now, not against the mount-time list.
+  // name has to be chosen against what the pod has right now, not against the last list.
   async function openSession(agent: AgentLauncher): Promise<void> {
     setAddAnchor(null);
     const local = sessions ?? [];
@@ -997,27 +1044,23 @@ export function SandboxTerminal({
     for (let suffix = 2; taken.has(name); suffix++) {
       name = `${agent.id}-${suffix}`;
     }
-    setSessions([...local, name]);
+    killedRef.current.delete(name);
+    setSessions(current => mergeSessions(current ?? [], [name], killedRef.current));
     setCommands(current => ({ ...current, [name]: agent.command }));
-    setActive(name);
+    selectTab(name);
   }
-
-  useEffect(() => {
-    if (active) {
-      writeActiveTab(pod, active);
-    }
-  }, [pod, active]);
 
   async function killSession(session: string): Promise<void> {
     setKilling(null);
+    // Before the kill, so a list already in flight cannot bring the tab back. Kept on failure: a
+    // dropped connection may still have killed it, and a tab is never dropped once merged back.
+    killedRef.current.add(session);
     const result = await runExec(pod, container, killSessionCommand(session));
     setListError(result.error);
     const all = sessions ?? [];
-    const remaining = all.filter(name => name !== session);
-    setSessions(remaining);
-    if (active === session) {
-      setActive(remaining[Math.max(0, all.indexOf(session) - 1)] ?? '');
-    }
+    const neighbor = all.filter(name => name !== session)[Math.max(0, all.indexOf(session) - 1)];
+    setSessions(current => (current ?? []).filter(name => name !== session));
+    setActive(current => (current === session ? neighbor ?? '' : current));
   }
 
   if (sessions === null) {
@@ -1054,7 +1097,7 @@ export function SandboxTerminal({
         >
           <Tabs
             value={active || false}
-            onChange={(_event, value: string) => setActive(value)}
+            onChange={(_event, value: string) => selectTab(value)}
             variant="scrollable"
             scrollButtons="auto"
             sx={{ flexGrow: 1, minHeight: 40 }}

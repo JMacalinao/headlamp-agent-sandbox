@@ -15,6 +15,9 @@ import {
   attachmentName,
   uploadCommand,
   LIST_SESSIONS_COMMAND,
+  parseSessions,
+  mergeSessions,
+  mergeTitles,
   attachCommand,
   killClientCommand,
   killSessionCommand,
@@ -191,6 +194,46 @@ test('LIST_SESSIONS_COMMAND swallows the no-server-running failure', () => {
 
 // The agent is typed into the session's shell, never passed here: tmux would exec the binary and
 // skip the image's rc, where `claude` is a shell function that gives it a unique socket path.
+test('parseSessions splits names and titles and skips blank lines', () => {
+  assert.deepEqual(parseSessions('claude\tFixing tests\nshell\t\n\n'), {
+    names: ['claude', 'shell'],
+    titles: { claude: 'Fixing tests', shell: '' },
+  });
+});
+
+test('mergeSessions appends new names in tmux order', () => {
+  assert.deepEqual(mergeSessions(['a'], ['c', 'a', 'b'], new Set()), ['a', 'c', 'b']);
+});
+
+test('mergeSessions keeps a local tab tmux does not list yet', () => {
+  assert.deepEqual(mergeSessions(['a', 'new'], ['a', 'b'], new Set()), ['a', 'new', 'b']);
+});
+
+test('mergeSessions does not bring back a killed session', () => {
+  assert.deepEqual(mergeSessions(['a'], ['a', 'b'], new Set(['b'])), ['a']);
+});
+
+test('mergeSessions returns the same array when nothing is added', () => {
+  const current = ['a', 'b'];
+  assert.equal(mergeSessions(current, ['b', 'a'], new Set()), current);
+  assert.equal(mergeSessions(current, ['c'], new Set(['c'])), current);
+});
+
+test('mergeTitles fills missing titles and never touches the active tab', () => {
+  const merged = mergeTitles(
+    { a: 'live', b: undefined, c: 'kept' },
+    { a: 'stale', b: 'restored', c: 'other', d: 'new' },
+    'a'
+  );
+  assert.deepEqual(merged, { a: 'live', b: 'restored', c: 'kept', d: 'new' });
+  assert.deepEqual(mergeTitles({}, { a: 'stale' }, 'a'), {});
+});
+
+test('mergeTitles returns the same object when nothing is filled', () => {
+  const current = { a: 'x' };
+  assert.equal(mergeTitles(current, { a: 'y', b: '' }, ''), current);
+});
+
 test('attachCommand always opens a bare session and turns on title forwarding', () => {
   const command = attachCommand('mysession').slice(4);
   assert.deepEqual(command.slice(0, 7), ['tmux', '-u', 'new', '-A', '-D', '-s', 'mysession']);

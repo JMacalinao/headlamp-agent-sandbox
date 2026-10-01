@@ -27,6 +27,7 @@ import {
   MAX_RECONNECTS,
   reconnectDelay,
   shifted,
+  ctrled,
   SHIFT_ENTER,
   WHEEL_UP,
   WHEEL_DOWN,
@@ -340,4 +341,16 @@ test('retype erases back to the common prefix and types the rest', () => {
   assert.equal(retype('same', 'same'), '');
   // Code points, not UTF-16 units: one emoji is one DEL.
   assert.equal(retype('a😀', 'a'), '\x7f');
+});
+
+test('ctrled maps letters to control codes and the toolbar keys to their Ctrl chords', () => {
+  assert.equal(ctrled('c'), '\x03');
+  assert.equal(ctrled('C'), '\x03');
+  assert.equal(ctrled('\u001b[F'), '\u001b[1;5F');
+  assert.equal(ctrled('\u001b[A'), '\u001b[1;5A');
+  // Ctrl after a sticky Shift.
+  assert.equal(ctrled(shifted('\u001b[H')), '\u001b[1;6H');
+  assert.equal(ctrled('\t'), undefined);
+  assert.equal(ctrled('\u001b'), undefined);
+  assert.equal(ctrled('ab'), undefined);
 });

@@ -35,6 +35,7 @@ import {
   CH_STDOUT,
   chunkBase64,
   CLIENT_PID_OSC,
+  ctrled,
   frameResize,
   frameText,
   keyboardInset,
@@ -355,9 +356,12 @@ function TerminalPane({
           key = chord;
         }
       }
-      if (ctrlArmedRef.current && key.length === 1 && key >= ' ' && key <= '~') {
-        armCtrl(false);
-        key = String.fromCharCode(key.toUpperCase().charCodeAt(0) & 0x1f);
+      if (ctrlArmedRef.current) {
+        const chord = ctrled(key);
+        if (chord !== undefined) {
+          armCtrl(false);
+          key = chord;
+        }
       }
       send(frameText(CH_STDIN, key));
     },

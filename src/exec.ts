@@ -219,6 +219,20 @@ export function shifted(data: string): string | undefined {
   return [...upper].length === 1 ? upper : data;
 }
 
+/** What `data` sends with Ctrl held, or undefined where Ctrl has no meaning. */
+export function ctrled(data: string): string | undefined {
+  if (data.length === 1 && data >= ' ' && data <= '~') {
+    return String.fromCharCode(data.toUpperCase().charCodeAt(0) & 0x1f);
+  }
+  // Arrows, Home and End, plain or already shifted: xterm modifier 5 is Ctrl, 6 Ctrl+Shift.
+  const body = data.slice(0, -1);
+  const final = data.slice(-1);
+  if ((body === '\x1b[' || body === '\x1b[1;2') && final !== '' && 'ABCDHF'.includes(final)) {
+    return `\x1b[1;${body === '\x1b[' ? 5 : 6}${final}`;
+  }
+  return undefined;
+}
+
 /** Whole scroll steps from an accumulated touch drag, truncated toward zero so the rest carries. */
 export function scrollSteps(pixels: number, rowHeight: number): number {
   return rowHeight > 0 ? Math.trunc(pixels / rowHeight) : 0;

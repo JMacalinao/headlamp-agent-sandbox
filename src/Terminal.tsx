@@ -460,15 +460,24 @@ function TerminalPane({
     // textarea listeners are cut off here and each textarea change is sent as a retype instead.
     const textarea = term.textarea;
     imeTextRef.current = '';
+    let realKey = false;
     const onImeEvent = (event: Event): void => {
       if (event.target !== textarea || !textarea) {
         return;
       }
-      if (event instanceof KeyboardEvent && event.keyCode !== 229) {
-        return;
+      if (event instanceof KeyboardEvent) {
+        realKey = event.type === 'keydown' && event.keyCode !== 229;
+        if (realKey || event.type === 'keyup') {
+          return;
+        }
       }
       event.stopPropagation();
       if (event.type !== 'input' && event.type !== 'compositionend') {
+        return;
+      }
+      // xterm already sent a real key from its keypress, which Chrome still follows with input.
+      if (realKey && !(event as InputEvent).isComposing) {
+        imeTextRef.current = textarea.value;
         return;
       }
       const keys = retype(imeTextRef.current, textarea.value);
@@ -481,6 +490,7 @@ function TerminalPane({
     };
     const IME_EVENTS = [
       'keydown',
+      'keyup',
       'compositionstart',
       'compositionupdate',
       'compositionend',

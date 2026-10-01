@@ -853,10 +853,10 @@ function TerminalPane({
       <Box
         sx={{
           display: 'flex',
-          flexWrap: 'wrap',
           gap: 0.5,
           p: 0.5,
           overflowX: 'auto',
+          '& > *': { flexShrink: 0 },
           borderTop: 1,
           borderColor: 'divider',
           ...(pinned && {

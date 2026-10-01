@@ -436,6 +436,16 @@ function TerminalPane({
     // Returning false skips xterm's own preventDefault and composition handling as well as the
     // keypress it would otherwise turn into a bare CR, so both are covered here.
     term.attachCustomKeyEventHandler(event => {
+      // Left to the browser, so Ctrl+V pastes (an image uploads) instead of sending ^V.
+      if (
+        event.ctrlKey &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        event.key.toLowerCase() === 'v'
+      ) {
+        return false;
+      }
       if (
         event.key !== 'Enter' ||
         !event.shiftKey ||
@@ -804,12 +814,14 @@ function TerminalPane({
         setDragging(false);
         void handleFiles(Array.from(event.dataTransfer.files));
       }}
-      onPaste={event => {
+      // Capture, so xterm's own paste handler on the textarea never sees an image paste.
+      onPasteCapture={event => {
         const files = Array.from(event.clipboardData.files);
         if (files.length === 0) {
           return;
         }
         event.preventDefault();
+        event.stopPropagation();
         void handleFiles(files);
       }}
     >
@@ -953,7 +965,7 @@ function TerminalPane({
           }}
         />
       </Box>
-      <Dialog open={screenText !== null} onClose={() => setScreenText(null)} fullWidth>
+      <Dialog open={screenText !== null} onClose={() => setScreenText(null)} maxWidth={false}>
         <DialogContent>
           <Box
             component="pre"

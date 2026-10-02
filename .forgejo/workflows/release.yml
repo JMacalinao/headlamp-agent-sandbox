@@ -101,18 +101,3 @@ jobs:
         run: |
           set -eu
           docker push "${{ steps.tag.outputs.ref }}"
-
-      - name: Log out of registry
-        if: always()
-        run: |
-          set -u
-          docker logout "$REGISTRY" || true
-
-      # The dind sidecar's layer store is a bounded emptyDir shared by every repo's
-      # jobs, so what this run leaves behind is the next run's eviction.
-      - name: Reclaim dind storage
-        if: always()
-        run: |
-          set -u
-          docker image prune -af || true
-          docker builder prune -af || true

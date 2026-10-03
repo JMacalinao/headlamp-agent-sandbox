@@ -531,6 +531,20 @@ function TerminalPane({
       }
       return true;
     });
+    // OSC 52 is how tmux copy-mode (and apps inside it) set the clipboard. xterm ignores it.
+    // A `?` read query is never answered, so the pod cannot read the local clipboard.
+    term.parser.registerOscHandler(52, data => {
+      const encoded = data.slice(data.indexOf(';') + 1);
+      if (encoded && encoded !== '?') {
+        try {
+          const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+          void navigator.clipboard.writeText(new TextDecoder().decode(bytes));
+        } catch {
+          // Malformed base64 from the pod; nothing to copy.
+        }
+      }
+      return true;
+    });
 
     // Exec'ing tmux directly means the process is tmux, not a login shell, so the image's rc
     // never runs its own `exec tmux new -A -s main` and each tab gets its own named session.

@@ -53,6 +53,7 @@ import {
   SHIFT_ENTER,
   shifted,
   unframe,
+  unwrapRows,
   uploadCommand,
   WHEEL_DOWN,
   WHEEL_UP,
@@ -293,11 +294,12 @@ function TerminalPane({
       return;
     }
     const buffer = term.buffer.active;
-    const lines: string[] = [];
+    const rows: { text: string; wrapped: boolean }[] = [];
     for (let row = 0; row < term.rows; row += 1) {
-      lines.push(buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? '');
+      const line = buffer.getLine(buffer.viewportY + row);
+      rows.push({ text: line?.translateToString(true) ?? '', wrapped: line?.isWrapped ?? false });
     }
-    setScreenText(lines.join('\n').trimEnd());
+    setScreenText(unwrapRows(rows));
   }, []);
 
   const send = useCallback((bytes: Uint8Array): void => {
@@ -989,7 +991,8 @@ function TerminalPane({
             component="pre"
             sx={{
               m: 0,
-              overflowX: 'auto',
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'anywhere',
               userSelect: 'text',
               fontFamily: TERMINAL_FONT,
               fontSize: 13,

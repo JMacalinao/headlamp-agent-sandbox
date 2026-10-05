@@ -31,6 +31,7 @@ import {
   SHIFT_ENTER,
   WHEEL_UP,
   WHEEL_DOWN,
+  unwrapRows,
 } from '../src/exec.ts';
 
 test('frame/unframe round-trip with a 0 byte and multi-byte UTF-8', () => {
@@ -353,4 +354,29 @@ test('ctrled maps letters to control codes and the toolbar keys to their Ctrl ch
   assert.equal(ctrled('\t'), undefined);
   assert.equal(ctrled('\u001b'), undefined);
   assert.equal(ctrled('ab'), undefined);
+});
+
+test('unwrapRows joins wrapped rows and app-wrapped paragraphs only', () => {
+  const row = (text, wrapped = false) => ({ text, wrapped });
+  assert.equal(
+    unwrapRows([
+      row('⏺ The quick brown fox jumps'),
+      row('  over the lazy dog and'),
+      row('  keeps going.'),
+      row(''),
+      row('  - short item'),
+      row('  - next item'),
+      row('abcdefghijklmnopqrstuvwxyz'),
+      row('0123', true),
+      row('╭──────────────────────────────────╮'),
+    ]),
+    [
+      '⏺ The quick brown fox jumps over the lazy dog and keeps going.',
+      '',
+      '  - short item',
+      '  - next item',
+      'abcdefghijklmnopqrstuvwxyz0123',
+      '╭──────────────────────────────────╮',
+    ].join('\n')
+  );
 });

@@ -380,3 +380,11 @@ test('unwrapRows joins wrapped rows and app-wrapped paragraphs only', () => {
     ].join('\n')
   );
 });
+
+test('unwrapRows ignores spaces written past the end of a row', () => {
+  const row = text => ({ text, wrapped: false });
+  assert.equal(
+    unwrapRows([row('  QA read done on the 5 Oct '), row('  batch is fine.            ')]),
+    '  QA read done on the 5 Oct batch is fine.'
+  );
+});

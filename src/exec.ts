@@ -270,13 +270,14 @@ const LIST_ITEM = /^([-*+•⏺⎿]|\d+[.)])\s/;
 /**
  * The screen's rows as text with the wrapping undone. Rows xterm marks as wrapped are glued on
  * directly. Apps like Claude Code wrap their own text with a newline and an indent instead, so a
- * row whose next word would not have fit on it is joined to it with a space. The widest row
+ * row whose next word would not have fit on it is joined to it with a space. Spaces the app
+ * wrote past the end of its text survive xterm's trim, so they are cut here. The widest row
  * outside any box-drawn border stands in for the width the app wrapped at.
  */
 export function unwrapRows(rows: { text: string; wrapped: boolean }[]): string {
   const width = Math.max(
     0,
-    ...rows.filter(row => !BOX_DRAWING.test(row.text)).map(row => row.text.length)
+    ...rows.filter(row => !BOX_DRAWING.test(row.text)).map(row => row.text.trimEnd().length)
   );
   const lines: string[] = [];
   let previous = '';
@@ -284,13 +285,16 @@ export function unwrapRows(rows: { text: string; wrapped: boolean }[]): string {
     if (lines.length > 0 && wrapped) {
       lines[lines.length - 1] += text;
     } else if (lines.length > 0 && continues(previous, text, width)) {
-      lines[lines.length - 1] += ` ${text.trimStart()}`;
+      lines[lines.length - 1] = `${lines[lines.length - 1].trimEnd()} ${text.trimStart()}`;
     } else {
       lines.push(text);
     }
-    previous = text;
+    previous = text.trimEnd();
   }
-  return lines.join('\n').trimEnd();
+  return lines
+    .map(line => line.trimEnd())
+    .join('\n')
+    .trimEnd();
 }
 
 function continues(previous: string, next: string, width: number): boolean {

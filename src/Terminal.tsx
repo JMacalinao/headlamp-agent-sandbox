@@ -431,17 +431,6 @@ function TerminalPane({
 
     // Ctrl/Cmd + right-click copies the hovered link. Plain right-click is left to tmux's menu.
     const onContextMenu = (event: MouseEvent): void => {
-      // A held finger fires this too. Besides the phone's menu, xterm's own right-click handler
-      // focuses its textarea and opens the keyboard, so it is stopped before reaching xterm.
-      // Android's long-press timeout races LONG_PRESS_MS, so winning it starts the selection.
-      if (touchSelecting || pressTimer !== null) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (pressTimer !== null) {
-          startTouchSelection();
-        }
-        return;
-      }
       if (hoveredUri === null || !withCtrl(event)) {
         return;
       }
@@ -678,6 +667,9 @@ function TerminalPane({
     let pressStart = { x: 0, y: 0 };
     let touchSelecting = false;
     let selectedCell = '';
+    // touchstart is canceled, so the browser makes no gestures of its own: no long press racing
+    // ours, no contextmenu, no focus shuffle that flashes the keyboard. Taps are rebuilt below.
+    let tapping = false;
 
     const cellAt = (x: number, y: number): [number, number] => {
       const screen = term.element?.querySelector('.xterm-screen') ?? holder;
@@ -693,6 +685,7 @@ function TerminalPane({
     };
     const startTouchSelection = (): void => {
       cancelPress();
+      tapping = false;
       touchSelecting = true;
       navigator.vibrate?.(10);
       report('press', pressStart.x, pressStart.y);
@@ -705,14 +698,37 @@ function TerminalPane({
     };
 
     const onTouchStart = (event: TouchEvent): void => {
+      event.preventDefault();
       dragY = event.touches.length === 1 ? event.touches[0].clientY : null;
       dragPixels = 0;
       cancelPress();
-      if (event.touches.length !== 1 || term.modes.mouseTrackingMode === 'none') {
+      tapping = event.touches.length === 1;
+      if (!tapping) {
         return;
       }
       pressStart = { x: event.touches[0].clientX, y: event.touches[0].clientY };
-      pressTimer = setTimeout(startTouchSelection, LONG_PRESS_MS);
+      if (term.modes.mouseTrackingMode !== 'none') {
+        pressTimer = setTimeout(startTouchSelection, LONG_PRESS_MS);
+      }
+    };
+
+    // The mouse events a browser makes from a tap. xterm focuses (opening the keyboard, as this
+    // runs inside the touchend), reports the click to tmux, and opens a link under the finger.
+    const tap = (x: number, y: number): void => {
+      const target = document.elementFromPoint(x, y) ?? holder;
+      (['mousemove', 'mousedown', 'mouseup', 'click'] as const).forEach(type =>
+        target.dispatchEvent(
+          new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            clientX: x,
+            clientY: y,
+            button: 0,
+            buttons: type === 'mousedown' ? 1 : 0,
+          })
+        )
+      );
     };
 
     const onTouchMove = (event: TouchEvent): void => {
@@ -726,13 +742,13 @@ function TerminalPane({
         return;
       }
       if (
-        pressTimer !== null &&
         Math.hypot(
           event.touches[0].clientX - pressStart.x,
           event.touches[0].clientY - pressStart.y
         ) > LONG_PRESS_SLOP
       ) {
         cancelPress();
+        tapping = false;
       }
       if (dragY === null || event.touches.length !== 1) {
         return;
@@ -747,9 +763,6 @@ function TerminalPane({
         return;
       }
       dragPixels -= steps * rowHeight;
-      // Only now, once this is a scroll and not a tap: canceling earlier would eat the tap that
-      // focuses the terminal and opens the keyboard.
-      event.preventDefault();
       // Dragging the content down reveals older output, so a positive delta scrolls back.
       if (term.modes.mouseTrackingMode === 'none') {
         term.scrollLines(-steps);
@@ -760,18 +773,20 @@ function TerminalPane({
 
     const onTouchEnd = (event: TouchEvent): void => {
       cancelPress();
+      if (tapping && event.type === 'touchend') {
+        tap(pressStart.x, pressStart.y);
+      }
+      tapping = false;
       if (!touchSelecting) {
         return;
       }
       touchSelecting = false;
-      // Not a tap: no click, so the keyboard stays as it was.
-      event.preventDefault();
       const [col, row] = selectedCell.split(';').map(Number);
       send(frameText(CH_STDIN, mouseReport('release', col, row)));
     };
 
-    holder.addEventListener('contextmenu', onContextMenu, { capture: true });
-    holder.addEventListener('touchstart', onTouchStart, { passive: true });
+    holder.addEventListener('contextmenu', onContextMenu);
+    holder.addEventListener('touchstart', onTouchStart, { passive: false });
     holder.addEventListener('touchmove', onTouchMove, { passive: false });
     holder.addEventListener('touchend', onTouchEnd, { passive: false });
     holder.addEventListener('touchcancel', onTouchEnd, { passive: false });
@@ -784,7 +799,7 @@ function TerminalPane({
       }
       document.removeEventListener('visibilitychange', onVisibility);
       observer.disconnect();
-      holder.removeEventListener('contextmenu', onContextMenu, { capture: true });
+      holder.removeEventListener('contextmenu', onContextMenu);
       holder.removeEventListener('touchstart', onTouchStart);
       holder.removeEventListener('touchmove', onTouchMove);
       holder.removeEventListener('touchend', onTouchEnd);

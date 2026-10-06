@@ -716,7 +716,10 @@ function TerminalPane({
       const rect = screen.getBoundingClientRect();
       const col = Math.floor(((x - rect.left) / rect.width) * term.cols) + 1;
       const row = Math.floor(((y - rect.top) / rect.height) * term.rows) + 1;
-      return [Math.min(Math.max(col, 1), term.cols), Math.min(Math.max(row, 1), term.rows)];
+      // A fingertip at the screen's edge lands a cell or so inside it, so the outer two columns
+      // on each side snap to the edge.
+      const edge = col <= 2 ? 1 : col >= term.cols - 1 ? term.cols : col;
+      return [edge, Math.min(Math.max(row, 1), term.rows)];
     };
     const report = (kind: 'press' | 'drag' | 'release', x: number, y: number): void => {
       const [col, row] = cellAt(x, y);

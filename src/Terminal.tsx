@@ -677,6 +677,7 @@ function TerminalPane({
     // With the keyboard up, touchstart is canceled so the browser makes no gestures of its own: no
     // long press racing ours, no focus shuffle that flashes the keyboard. Taps are rebuilt below.
     // With it down the touch stays native, since only a real tap makes Android open the keyboard.
+    // Focus alone does not mean it is up: Back closes the keyboard and leaves the textarea focused.
     let tapping = false;
 
     const cellAt = (x: number, y: number): [number, number] => {
@@ -706,7 +707,12 @@ function TerminalPane({
     };
 
     const onTouchStart = (event: TouchEvent): void => {
-      if (document.activeElement === term.textarea) {
+      const visual = window.visualViewport;
+      if (
+        document.activeElement === term.textarea &&
+        visual &&
+        keyboardInset(window.innerHeight, visual.height, visual.offsetTop) > 0
+      ) {
         event.preventDefault();
       }
       dragY = event.touches.length === 1 ? event.touches[0].clientY : null;

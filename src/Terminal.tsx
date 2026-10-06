@@ -433,9 +433,13 @@ function TerminalPane({
     const onContextMenu = (event: MouseEvent): void => {
       // A held finger fires this too. Besides the phone's menu, xterm's own right-click handler
       // focuses its textarea and opens the keyboard, so it is stopped before reaching xterm.
+      // Android's long-press timeout races LONG_PRESS_MS, so winning it starts the selection.
       if (touchSelecting || pressTimer !== null) {
         event.preventDefault();
         event.stopPropagation();
+        if (pressTimer !== null) {
+          startTouchSelection();
+        }
         return;
       }
       if (hoveredUri === null || !withCtrl(event)) {
@@ -687,6 +691,12 @@ function TerminalPane({
       selectedCell = `${col};${row}`;
       send(frameText(CH_STDIN, mouseReport(kind, col, row)));
     };
+    const startTouchSelection = (): void => {
+      cancelPress();
+      touchSelecting = true;
+      navigator.vibrate?.(10);
+      report('press', pressStart.x, pressStart.y);
+    };
     const cancelPress = (): void => {
       if (pressTimer !== null) {
         clearTimeout(pressTimer);
@@ -702,12 +712,7 @@ function TerminalPane({
         return;
       }
       pressStart = { x: event.touches[0].clientX, y: event.touches[0].clientY };
-      pressTimer = setTimeout(() => {
-        pressTimer = null;
-        touchSelecting = true;
-        navigator.vibrate?.(10);
-        report('press', pressStart.x, pressStart.y);
-      }, LONG_PRESS_MS);
+      pressTimer = setTimeout(startTouchSelection, LONG_PRESS_MS);
     };
 
     const onTouchMove = (event: TouchEvent): void => {

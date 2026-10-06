@@ -730,6 +730,11 @@ function TerminalPane({
       cancelPress();
       tapping = false;
       touchSelecting = true;
+      // Android opens the keyboard by itself as a selection ends with it down. manual stops that,
+      // and auto comes back once the release has settled.
+      if (!keyboardUp()) {
+        term.textarea?.setAttribute('virtualkeyboardpolicy', 'manual');
+      }
       navigator.vibrate?.(10);
       report('press', pressStart.x, pressStart.y);
     };
@@ -836,6 +841,7 @@ function TerminalPane({
       touchSelecting = false;
       // Not a tap: no click, so the keyboard stays as it was.
       event.preventDefault();
+      setTimeout(() => term.textarea?.removeAttribute('virtualkeyboardpolicy'), KEYBOARD_OPEN_MS);
       const [col, row] = selectedCell.split(';').map(Number);
       send(frameText(CH_STDIN, mouseReport('release', col, row)));
     };

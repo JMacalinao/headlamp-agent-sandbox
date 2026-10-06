@@ -266,47 +266,94 @@ export function retype(before: string, after: string): string {
 
 const BOX_DRAWING = /[─-╿]/;
 const LIST_ITEM = /^([-*+•⏺⎿]|\d+[.)])\s/;
+const QUOTE_BAR = /^(\s*)[▎▍▌│┃] ?/;
+
+interface Line {
+  indent: number;
+  quoted: boolean;
+  body: string;
+}
+
+function parseLine(text: string): Line {
+  const line = text.trimEnd();
+  const bar = QUOTE_BAR.exec(line);
+  const rest = bar ? line.slice(bar[0].length) : line;
+  const body = rest.trimStart();
+  return {
+    indent: (bar ? bar[1].length : 0) + rest.length - body.length,
+    quoted: bar !== null,
+    body,
+  };
+}
 
 /**
  * The screen's rows as text with the wrapping undone. Rows xterm marks as wrapped are glued on
  * directly. Apps like Claude Code wrap their own text with a newline and an indent instead, so a
- * row whose next word would not have fit on it is joined to it with a space. Spaces the app
- * wrote past the end of its text survive xterm's trim, so they are cut here. The widest row
- * outside any box-drawn border stands in for the width the app wrapped at.
+ * row whose next word would not have fit on it is joined to it with a space. The widest row
+ * outside any box-drawn border stands in for the width the app wrapped at. Quote bars are
+ * dropped, and each blank-line-separated block loses the indent all its lines share.
  */
 export function unwrapRows(rows: { text: string; wrapped: boolean }[]): string {
   const width = Math.max(
     0,
     ...rows.filter(row => !BOX_DRAWING.test(row.text)).map(row => row.text.trimEnd().length)
   );
-  const lines: string[] = [];
-  let previous = '';
+  // tail is the length of a line's last screen row, the one the app would have wrapped.
+  const logical: { text: string; tail: number }[] = [];
   for (const { text, wrapped } of rows) {
-    if (lines.length > 0 && wrapped) {
-      lines[lines.length - 1] += text;
-    } else if (lines.length > 0 && continues(previous, text, width)) {
-      lines[lines.length - 1] = `${lines[lines.length - 1].trimEnd()} ${text.trimStart()}`;
+    const last = logical.at(-1);
+    if (wrapped && last) {
+      last.text += text;
+      last.tail = text.trimEnd().length;
     } else {
-      lines.push(text);
+      logical.push({ text, tail: text.trimEnd().length });
     }
-    previous = text.trimEnd();
   }
-  return lines
-    .map(line => line.trimEnd())
-    .join('\n')
-    .trimEnd();
+
+  const lines: Line[] = [];
+  let tail = 0;
+  for (const row of logical) {
+    const line = parseLine(row.text);
+    const last = lines.at(-1);
+    if (last && continues(last, tail, line, width)) {
+      last.body += ` ${line.body}`;
+    } else {
+      lines.push(line);
+    }
+    tail = row.tail;
+  }
+  return dedent(lines).join('\n').trimEnd();
 }
 
-function continues(previous: string, next: string, width: number): boolean {
-  const body = next.trimStart();
-  const indent = (line: string): number => line.length - line.trimStart().length;
+function continues(previous: Line, tail: number, next: Line, width: number): boolean {
   return (
-    previous.trim() !== '' &&
-    body !== '' &&
-    !BOX_DRAWING.test(previous) &&
-    !BOX_DRAWING.test(next) &&
-    !LIST_ITEM.test(body) &&
-    indent(next) >= indent(previous) &&
-    previous.length + 1 + body.split(/\s/)[0].length > width
+    previous.body !== '' &&
+    next.body !== '' &&
+    previous.quoted === next.quoted &&
+    !BOX_DRAWING.test(previous.body) &&
+    !BOX_DRAWING.test(next.body) &&
+    !LIST_ITEM.test(next.body) &&
+    next.indent >= previous.indent &&
+    tail + 1 + next.body.split(/\s/)[0].length > width
   );
+}
+
+function dedent(lines: Line[]): string[] {
+  const out: string[] = [];
+  let block: Line[] = [];
+  const flush = (): void => {
+    const shared = Math.min(...block.map(line => line.indent));
+    block.forEach(line => out.push(' '.repeat(line.indent - shared) + line.body));
+    block = [];
+  };
+  for (const line of lines) {
+    if (line.body === '') {
+      flush();
+      out.push('');
+    } else {
+      block.push(line);
+    }
+  }
+  flush();
+  return out;
 }

@@ -385,6 +385,31 @@ test('unwrapRows ignores spaces written past the end of a row', () => {
   const row = text => ({ text, wrapped: false });
   assert.equal(
     unwrapRows([row('  QA read done on the 5 Oct '), row('  batch is fine.            ')]),
-    '  QA read done on the 5 Oct batch is fine.'
+    'QA read done on the 5 Oct batch is fine.'
+  );
+});
+
+test('unwrapRows drops quote bars and the indent a block shares', () => {
+  const row = text => ({ text, wrapped: false });
+  assert.equal(
+    unwrapRows([
+      row('  Nothing has been posted. Here is the'),
+      row('  reply, ready to go:'),
+      row(''),
+      row('  ▎ @Alex cc @Redentor Item 4 of #2330'),
+      row('  ▎ is done. The five attachments are'),
+      row('  ▎ gone.'),
+      row(''),
+      row('  - one'),
+      row('    - nested'),
+    ]),
+    [
+      'Nothing has been posted. Here is the reply, ready to go:',
+      '',
+      '@Alex cc @Redentor Item 4 of #2330 is done. The five attachments are gone.',
+      '',
+      '- one',
+      '  - nested',
+    ].join('\n')
   );
 });

@@ -431,9 +431,11 @@ function TerminalPane({
 
     // Ctrl/Cmd + right-click copies the hovered link. Plain right-click is left to tmux's menu.
     const onContextMenu = (event: MouseEvent): void => {
-      // Android's long-press menu would land on top of a touch selection.
-      if (touchSelecting) {
+      // A held finger fires this too. Besides the phone's menu, xterm's own right-click handler
+      // focuses its textarea and opens the keyboard, so it is stopped before reaching xterm.
+      if (touchSelecting || pressTimer !== null) {
         event.preventDefault();
+        event.stopPropagation();
         return;
       }
       if (hoveredUri === null || !withCtrl(event)) {
@@ -763,7 +765,7 @@ function TerminalPane({
       send(frameText(CH_STDIN, mouseReport('release', col, row)));
     };
 
-    holder.addEventListener('contextmenu', onContextMenu);
+    holder.addEventListener('contextmenu', onContextMenu, { capture: true });
     holder.addEventListener('touchstart', onTouchStart, { passive: true });
     holder.addEventListener('touchmove', onTouchMove, { passive: false });
     holder.addEventListener('touchend', onTouchEnd, { passive: false });
@@ -777,7 +779,7 @@ function TerminalPane({
       }
       document.removeEventListener('visibilitychange', onVisibility);
       observer.disconnect();
-      holder.removeEventListener('contextmenu', onContextMenu);
+      holder.removeEventListener('contextmenu', onContextMenu, { capture: true });
       holder.removeEventListener('touchstart', onTouchStart);
       holder.removeEventListener('touchmove', onTouchMove);
       holder.removeEventListener('touchend', onTouchEnd);

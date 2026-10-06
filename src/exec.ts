@@ -357,3 +357,8 @@ function dedent(lines: Line[]): string[] {
   flush();
   return out;
 }
+
+/** An SGR mouse report for the left button: a press, a drag (the 32 motion bit) or a release. */
+export function mouseReport(kind: 'press' | 'drag' | 'release', col: number, row: number): string {
+  return `\x1b[<${kind === 'drag' ? 32 : 0};${col};${row}${kind === 'release' ? 'm' : 'M'}`;
+}

@@ -45,6 +45,7 @@ import {
   MAX_RECONNECTS,
   mergeSessions,
   mergeTitles,
+  mouseReport,
   parseSessions,
   parseStatus,
   reconnectDelay,
@@ -63,6 +64,10 @@ import { AgentLauncher, AGENTS } from './sandbox';
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const SESSION_POLL_MS = 5000;
+// Android's own long press is 400-500ms; under that a still finger is still a tap.
+const LONG_PRESS_MS = 400;
+// Pixels a finger may wander and still count as held, under the row a scroll step takes.
+const LONG_PRESS_SLOP = 8;
 
 const KEYS: { label: string; bytes: string }[] = [
   { label: 'Esc', bytes: '\x1b' },
@@ -426,6 +431,11 @@ function TerminalPane({
 
     // Ctrl/Cmd + right-click copies the hovered link. Plain right-click is left to tmux's menu.
     const onContextMenu = (event: MouseEvent): void => {
+      // Android's long-press menu would land on top of a touch selection.
+      if (touchSelecting) {
+        event.preventDefault();
+        return;
+      }
       if (hoveredUri === null || !withCtrl(event)) {
         return;
       }
@@ -656,13 +666,67 @@ function TerminalPane({
     // tmux holds the history and listens for wheel reports. Turn a drag into both.
     let dragY: number | null = null;
     let dragPixels = 0;
+    // A drag already scrolls, so a held finger is what starts a tmux selection. It goes out as SGR
+    // mouse reports, as a desktop mouse drag would; tmux copies on release and OSC 52 lands above.
+    let pressTimer: ReturnType<typeof setTimeout> | null = null;
+    let pressStart = { x: 0, y: 0 };
+    let touchSelecting = false;
+    let selectedCell = '';
+
+    const cellAt = (x: number, y: number): [number, number] => {
+      const screen = term.element?.querySelector('.xterm-screen') ?? holder;
+      const rect = screen.getBoundingClientRect();
+      const col = Math.floor(((x - rect.left) / rect.width) * term.cols) + 1;
+      const row = Math.floor(((y - rect.top) / rect.height) * term.rows) + 1;
+      return [Math.min(Math.max(col, 1), term.cols), Math.min(Math.max(row, 1), term.rows)];
+    };
+    const report = (kind: 'press' | 'drag' | 'release', x: number, y: number): void => {
+      const [col, row] = cellAt(x, y);
+      selectedCell = `${col};${row}`;
+      send(frameText(CH_STDIN, mouseReport(kind, col, row)));
+    };
+    const cancelPress = (): void => {
+      if (pressTimer !== null) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
+    };
 
     const onTouchStart = (event: TouchEvent): void => {
       dragY = event.touches.length === 1 ? event.touches[0].clientY : null;
       dragPixels = 0;
+      cancelPress();
+      if (event.touches.length !== 1 || term.modes.mouseTrackingMode === 'none') {
+        return;
+      }
+      pressStart = { x: event.touches[0].clientX, y: event.touches[0].clientY };
+      pressTimer = setTimeout(() => {
+        pressTimer = null;
+        touchSelecting = true;
+        navigator.vibrate?.(10);
+        report('press', pressStart.x, pressStart.y);
+      }, LONG_PRESS_MS);
     };
 
     const onTouchMove = (event: TouchEvent): void => {
+      if (touchSelecting) {
+        event.preventDefault();
+        const { clientX, clientY } = event.touches[0];
+        const [col, row] = cellAt(clientX, clientY);
+        if (`${col};${row}` !== selectedCell) {
+          report('drag', clientX, clientY);
+        }
+        return;
+      }
+      if (
+        pressTimer !== null &&
+        Math.hypot(
+          event.touches[0].clientX - pressStart.x,
+          event.touches[0].clientY - pressStart.y
+        ) > LONG_PRESS_SLOP
+      ) {
+        cancelPress();
+      }
       if (dragY === null || event.touches.length !== 1) {
         return;
       }
@@ -687,9 +751,23 @@ function TerminalPane({
       }
     };
 
+    const onTouchEnd = (event: TouchEvent): void => {
+      cancelPress();
+      if (!touchSelecting) {
+        return;
+      }
+      touchSelecting = false;
+      // Not a tap: no click, so the keyboard stays as it was.
+      event.preventDefault();
+      const [col, row] = selectedCell.split(';').map(Number);
+      send(frameText(CH_STDIN, mouseReport('release', col, row)));
+    };
+
     holder.addEventListener('contextmenu', onContextMenu);
     holder.addEventListener('touchstart', onTouchStart, { passive: true });
     holder.addEventListener('touchmove', onTouchMove, { passive: false });
+    holder.addEventListener('touchend', onTouchEnd, { passive: false });
+    holder.addEventListener('touchcancel', onTouchEnd, { passive: false });
 
     return () => {
       disposedRef.current = true;
@@ -702,6 +780,9 @@ function TerminalPane({
       holder.removeEventListener('contextmenu', onContextMenu);
       holder.removeEventListener('touchstart', onTouchStart);
       holder.removeEventListener('touchmove', onTouchMove);
+      holder.removeEventListener('touchend', onTouchEnd);
+      holder.removeEventListener('touchcancel', onTouchEnd);
+      cancelPress();
       IME_EVENTS.forEach(type => holder.removeEventListener(type, onImeEvent, true));
       typing.dispose();
       titling.dispose();
@@ -873,6 +954,9 @@ function TerminalPane({
           overflow: 'hidden',
           touchAction: 'none',
           overscrollBehavior: 'contain',
+          // The phone's own long-press text selection and callout would fight the tmux one.
+          userSelect: 'none',
+          WebkitTouchCallout: 'none',
           // opacity, not visibility: a hidden textarea refuses the focus the pane takes on show.
           opacity: fontApplied ? 1 : 0,
         }}

@@ -32,6 +32,7 @@ import {
   WHEEL_UP,
   WHEEL_DOWN,
   unwrapRows,
+  mouseReport,
 } from '../src/exec.ts';
 
 test('frame/unframe round-trip with a 0 byte and multi-byte UTF-8', () => {
@@ -412,4 +413,10 @@ test('unwrapRows drops quote bars and the indent a block shares', () => {
       '  - nested',
     ].join('\n')
   );
+});
+
+test('mouseReport builds SGR left-button reports', () => {
+  assert.equal(mouseReport('press', 3, 7), '\u001b[<0;3;7M');
+  assert.equal(mouseReport('drag', 4, 7), '\u001b[<32;4;7M');
+  assert.equal(mouseReport('release', 4, 7), '\u001b[<0;4;7m');
 });

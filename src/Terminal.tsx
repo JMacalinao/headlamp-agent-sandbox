@@ -68,6 +68,8 @@ const SESSION_POLL_MS = 5000;
 const LONG_PRESS_MS = 400;
 // Pixels a finger may wander and still count as held, under the row a scroll step takes.
 const LONG_PRESS_SLOP = 8;
+// How long the keyboard gets to open before navigator.virtualKeyboard is judged not to work.
+const KEYBOARD_OPEN_MS = 1000;
 
 const KEYS: { label: string; bytes: string }[] = [
   { label: 'Esc', bytes: '\x1b' },
@@ -674,11 +676,40 @@ function TerminalPane({
     let pressStart = { x: 0, y: 0 };
     let touchSelecting = false;
     let selectedCell = '';
-    // With the keyboard up, touchstart is canceled so the browser makes no gestures of its own: no
-    // long press racing ours, no focus shuffle that flashes the keyboard. Taps are rebuilt below.
-    // With it down the touch stays native, since only a real tap makes Android open the keyboard.
-    // Focus alone does not mean it is up: Back closes the keyboard and leaves the textarea focused.
+    // touchstart is canceled so the browser makes no gestures of its own: no long press racing
+    // ours, no focus shuffle that flashes the keyboard. Taps are rebuilt below. A rebuilt tap's
+    // focus does not open the Android keyboard, so with it down the tap also asks
+    // navigator.virtualKeyboard to. Without that API, or once it has failed to, touches with the
+    // keyboard down stay native instead.
     let tapping = false;
+    let openKeyboardOnTap = false;
+    let canOpenKeyboard = 'virtualKeyboard' in navigator;
+
+    // Focus alone does not mean it is up: Back closes the keyboard and leaves the textarea focused.
+    const keyboardUp = (): boolean => {
+      const visual = window.visualViewport;
+      return (
+        document.activeElement === term.textarea &&
+        !!visual &&
+        keyboardInset(window.innerHeight, visual.height, visual.offsetTop) > 0
+      );
+    };
+    const openKeyboard = (): void => {
+      const textarea = term.textarea;
+      if (!textarea) {
+        return;
+      }
+      // show() only acts on an element whose policy is manual. Auto comes back once the keyboard
+      // has had time to open, so focus and blur open and close it as before.
+      textarea.setAttribute('virtualkeyboardpolicy', 'manual');
+      (navigator as any).virtualKeyboard.show();
+      setTimeout(() => {
+        textarea.removeAttribute('virtualkeyboardpolicy');
+        if (!keyboardUp()) {
+          canOpenKeyboard = false;
+        }
+      }, KEYBOARD_OPEN_MS);
+    };
 
     const cellAt = (x: number, y: number): [number, number] => {
       const screen = term.element?.querySelector('.xterm-screen') ?? holder;
@@ -707,14 +738,11 @@ function TerminalPane({
     };
 
     const onTouchStart = (event: TouchEvent): void => {
-      const visual = window.visualViewport;
-      if (
-        document.activeElement === term.textarea &&
-        visual &&
-        keyboardInset(window.innerHeight, visual.height, visual.offsetTop) > 0
-      ) {
+      const up = keyboardUp();
+      if (up || canOpenKeyboard) {
         event.preventDefault();
       }
+      openKeyboardOnTap = !up;
       dragY = event.touches.length === 1 ? event.touches[0].clientY : null;
       dragPixels = 0;
       cancelPress();
@@ -728,8 +756,8 @@ function TerminalPane({
       }
     };
 
-    // The mouse events a browser makes from a tap. xterm focuses (opening the keyboard, as this
-    // runs inside the touchend), reports the click to tmux, and opens a link under the finger.
+    // The mouse events a browser makes from a tap. xterm focuses, reports the click to tmux, and
+    // opens a link under the finger.
     const tap = (x: number, y: number): void => {
       const target = document.elementFromPoint(x, y) ?? holder;
       (['mousemove', 'mousedown', 'mouseup', 'click'] as const).forEach(type =>
@@ -794,6 +822,9 @@ function TerminalPane({
       cancelPress();
       if (tapping && event.type === 'touchend') {
         tap(pressStart.x, pressStart.y);
+        if (openKeyboardOnTap) {
+          openKeyboard();
+        }
       }
       tapping = false;
       if (!touchSelecting) {

@@ -456,7 +456,7 @@ export function parseAccounts(stdout: string): Record<AccountAgent, string> {
 
 // Restarts every running `agent` in every tmux pane, in parallel, under the account file just
 // written, resuming the exact conversation. Claude names its pane and conversation in
-// ~/.claude/sessions/<pid>.json; Codex keeps its rollout file (named after the session id) open.
+// ~/.claude/sessions/<pid>.json (its binary resolves to claude/versions/<version>); Codex keeps its rollout file (named after the session id) open.
 // Prints one `<session>\t<result>` line per pane.
 // ponytail: Codex has no busy flag, so "idle" is a rollout file untouched for 10s; a long silent
 // tool call can look idle. Upgrade if Codex ever exposes its turn state.
@@ -495,7 +495,7 @@ if [ "$agent" = claude ]; then
   for f in "$HOME"/.claude/sessions/*.json; do
     set -- $(jq -r '"\\(.pid) \\(.sessionId) \\(.tmux // "")"' "$f" 2>/dev/null)
     [ -n "\${3:-}" ] || continue
-    case "$(readlink "/proc/$1/exe" 2>/dev/null)" in */claude) ;; *) continue ;; esac
+    case "$(readlink "/proc/$1/exe" 2>/dev/null)" in */claude | */claude/versions/*) ;; *) continue ;; esac
     restart "\${3##*.}" "$1" "$2" "" &
   done
 else

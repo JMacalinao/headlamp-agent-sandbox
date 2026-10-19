@@ -1,6 +1,7 @@
 import { ApiProxy, ConfigStore } from '@kinvolk/headlamp-plugin/lib';
 import { makeCustomResourceClass } from '@kinvolk/headlamp-plugin/lib/Crd';
 import type { KubeObject, KubeObjectClass } from '@kinvolk/headlamp-plugin/lib/lib/k8s/KubeObject';
+import { type Account, type AccountAgent, type AccountKind, launchCommand } from './exec';
 
 const SANDBOX_API = '/apis/agents.x-k8s.io/v1beta1';
 const TEMPLATE_API = '/apis/extensions.agents.x-k8s.io/v1beta1';
@@ -145,9 +146,57 @@ export interface AgentLauncher {
 }
 
 export const AGENTS: AgentLauncher[] = [
-  { id: 'claude', label: 'Claude Code', command: 'claude' },
-  { id: 'codex', label: 'Codex', command: 'codex' },
+  { id: 'claude', label: 'Claude Code', command: launchCommand('claude') },
+  { id: 'codex', label: 'Codex', command: launchCommand('codex') },
   { id: 'opencode', label: 'opencode', command: 'opencode' },
   { id: 'hermes', label: 'Hermes', command: 'hermes' },
   { id: 'shell', label: 'Shell', command: undefined },
 ];
+
+export const AGENT_LABELS: Record<AccountAgent, string> = { claude: 'Claude Code', codex: 'Codex' };
+
+export interface StoredAccount extends Account {
+  /** Empty for a Codex subscription, which logs in inside each pod instead. */
+  credential: string;
+}
+
+const ACCOUNT_LABEL = 'headlamp-agent-sandbox/account';
+const ACCOUNT_PREFIX = 'agent-account-';
+
+function secretsUrl(namespace: string): string {
+  return `/api/v1/namespaces/${namespace}/secrets`;
+}
+
+export async function listAccounts(namespace: string): Promise<StoredAccount[]> {
+  const list: { items: { metadata: { name: string }; data?: Record<string, string> }[] } =
+    await ApiProxy.request(
+      `${secretsUrl(namespace)}?labelSelector=${encodeURIComponent(`${ACCOUNT_LABEL}=true`)}`
+    );
+  return list.items
+    .map(secret => ({
+      id: secret.metadata.name.slice(ACCOUNT_PREFIX.length),
+      agent: atob(secret.data?.agent ?? '') as AccountAgent,
+      kind: atob(secret.data?.kind ?? '') as AccountKind,
+      credential: atob(secret.data?.credential ?? ''),
+    }))
+    .filter(account => account.agent === 'claude' || account.agent === 'codex')
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export async function createAccount(namespace: string, account: StoredAccount): Promise<void> {
+  await ApiProxy.post(secretsUrl(namespace), {
+    apiVersion: 'v1',
+    kind: 'Secret',
+    metadata: {
+      name: `${ACCOUNT_PREFIX}${account.id}`,
+      namespace,
+      labels: { [ACCOUNT_LABEL]: 'true' },
+    },
+    type: 'Opaque',
+    stringData: { agent: account.agent, kind: account.kind, credential: account.credential },
+  });
+}
+
+export async function deleteAccount(namespace: string, id: string): Promise<void> {
+  await ApiProxy.remove(`${secretsUrl(namespace)}/${ACCOUNT_PREFIX}${id}`);
+}

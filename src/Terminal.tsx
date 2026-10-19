@@ -6,14 +6,18 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
+  FormControlLabel,
   IconButton,
   LinearProgress,
+  ListItemIcon,
+  ListSubheader,
   Menu,
   MenuItem,
   Portal,
@@ -27,6 +31,9 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ACCOUNT_AGENTS,
+  type AccountAgent,
+  accountEnvFile,
   attachCommand,
   attachmentName,
   CH_ERROR,
@@ -36,6 +43,7 @@ import {
   chunkBase64,
   CLIENT_PID_OSC,
   ctrled,
+  DEFAULT_ACCOUNT,
   frameResize,
   frameText,
   keyboardInset,
@@ -46,9 +54,14 @@ import {
   mergeSessions,
   mergeTitles,
   mouseReport,
+  parseAccounts,
+  parseRestarts,
   parseSessions,
   parseStatus,
+  prepareCodexHomeCommand,
+  READ_ACCOUNTS_COMMAND,
   reconnectDelay,
+  restartAgentsCommand,
   retype,
   scrollSteps,
   SHIFT_ENTER,
@@ -58,9 +71,10 @@ import {
   uploadCommand,
   WHEEL_DOWN,
   WHEEL_UP,
+  writeAccountEnvCommand,
 } from './exec';
 import { ensureTerminalFont, TERMINAL_FONT, TERMINAL_FONT_LOADING } from './font';
-import { AgentLauncher, AGENTS } from './sandbox';
+import { AGENT_LABELS, AgentLauncher, AGENTS, listAccounts, type StoredAccount } from './sandbox';
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const SESSION_POLL_MS = 5000;
@@ -1196,6 +1210,192 @@ function TerminalPane({
   );
 }
 
+async function succeeded(pending: Promise<ExecResult>): Promise<ExecResult> {
+  const result = await pending;
+  if (result.error) {
+    throw new Error(`${result.error}${result.stdout ? `: ${result.stdout.trim()}` : ''}`);
+  }
+  return result;
+}
+
+function stdinOf(b64: string): RunExecOptions {
+  return b64 ? { input: { chunks: chunkBase64(b64), onProgress: () => {} } } : {};
+}
+
+/** Sets the sandbox's active Claude and Codex accounts and restarts running agents onto them. */
+function AccountSwitcher({
+  pod,
+  container,
+  namespace,
+}: {
+  pod: Pod;
+  container: string;
+  namespace: string;
+}): React.ReactNode {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [accounts, setAccounts] = useState<StoredAccount[] | null>(null);
+  const [current, setCurrent] = useState<Record<AccountAgent, string> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<{
+    agent: AccountAgent;
+    account: StoredAccount | null;
+  } | null>(null);
+  const [restart, setRestart] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<{ session: string; result: string }[] | null>(null);
+
+  // Read on every open: another browser may have switched the sandbox since.
+  async function open(target: HTMLElement): Promise<void> {
+    setAnchor(target);
+    setError(null);
+    setAccounts(null);
+    try {
+      const [list, read] = await Promise.all([
+        listAccounts(namespace),
+        succeeded(runExec(pod, container, READ_ACCOUNTS_COMMAND)),
+      ]);
+      setAccounts(list);
+      setCurrent(parseAccounts(read.stdout));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  function choose(agent: AccountAgent, account: StoredAccount | null): void {
+    setAnchor(null);
+    setError(null);
+    setResults(null);
+    setRestart(true);
+    setPending({ agent, account });
+  }
+
+  async function apply(): Promise<void> {
+    if (!pending) {
+      return;
+    }
+    const { agent, account } = pending;
+    setBusy(true);
+    setError(null);
+    try {
+      if (account?.agent === 'codex') {
+        const key = account.kind === 'api' ? btoa(account.credential.trim()) : '';
+        await succeeded(
+          runExec(pod, container, prepareCodexHomeCommand(account.id, key.length), stdinOf(key))
+        );
+      }
+      const env = btoa(accountEnvFile(account, account?.credential ?? ''));
+      await succeeded(
+        runExec(pod, container, writeAccountEnvCommand(agent, env.length), stdinOf(env))
+      );
+      setCurrent(active => active && { ...active, [agent]: account?.id ?? DEFAULT_ACCOUNT });
+      if (restart) {
+        const result = await succeeded(runExec(pod, container, restartAgentsCommand(agent)));
+        setResults(parseRestarts(result.stdout));
+      } else {
+        setPending(null);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const label = pending ? AGENT_LABELS[pending.agent] : '';
+  const name = pending?.account?.id ?? DEFAULT_ACCOUNT;
+
+  return (
+    <>
+      <Tooltip title="Accounts">
+        <IconButton aria-label="Accounts" onClick={event => void open(event.currentTarget)}>
+          <Icon icon="mdi:account-switch" />
+        </IconButton>
+      </Tooltip>
+      <Menu anchorEl={anchor} open={!!anchor} onClose={() => setAnchor(null)}>
+        {error && <MenuItem disabled>{error}</MenuItem>}
+        {!error && !accounts && (
+          <MenuItem disabled>
+            <CircularProgress size={16} />
+          </MenuItem>
+        )}
+        {accounts &&
+          ACCOUNT_AGENTS.flatMap(agent => [
+            <ListSubheader key={agent}>{AGENT_LABELS[agent]}</ListSubheader>,
+            ...[null, ...accounts.filter(account => account.agent === agent)].map(account => {
+              const id = account?.id ?? DEFAULT_ACCOUNT;
+              return (
+                <MenuItem
+                  key={`${agent}/${id}`}
+                  selected={current?.[agent] === id}
+                  onClick={() => choose(agent, account)}
+                >
+                  <ListItemIcon>
+                    {current?.[agent] === id && <Icon icon="mdi:check" />}
+                  </ListItemIcon>
+                  {account
+                    ? `${id} (${account.kind === 'api' ? 'API key' : 'subscription'})`
+                    : 'Default (pod credentials)'}
+                </MenuItem>
+              );
+            }),
+          ])}
+      </Menu>
+      <Dialog open={!!pending} onClose={() => !busy && setPending(null)}>
+        <DialogTitle>
+          Switch {label} to {name}?
+        </DialogTitle>
+        <DialogContent>
+          {error && <Alert severity="error">{error}</Alert>}
+          {results ? (
+            results.length ? (
+              results.map(({ session, result }) => (
+                <DialogContentText key={session}>
+                  {session}: {result}
+                </DialogContentText>
+              ))
+            ) : (
+              <DialogContentText>No running {label} sessions to restart.</DialogContentText>
+            )
+          ) : (
+            <>
+              <DialogContentText>
+                New {label} sessions in this sandbox will use {name}.
+              </DialogContentText>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={restart}
+                    onChange={event => setRestart(event.target.checked)}
+                  />
+                }
+                label={`Restart running ${label} sessions`}
+              />
+              <DialogContentText variant="body2">
+                Each session quits once it is idle and resumes its conversation under the new
+                account. The prompt cache starts over, so the next turn on an API key costs more.
+              </DialogContentText>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          {results ? (
+            <Button onClick={() => setPending(null)}>Close</Button>
+          ) : (
+            <>
+              <Button disabled={busy} onClick={() => setPending(null)}>
+                Cancel
+              </Button>
+              <Button disabled={busy} onClick={() => void apply()}>
+                {busy ? <CircularProgress size={20} /> : 'Switch'}
+              </Button>
+            </>
+          )}
+        </DialogActions>
+      </Dialog>
+    </>
+  );
+}
+
 export interface SandboxTerminalProps {
   pod: Pod;
   container: string;
@@ -1206,6 +1406,7 @@ export interface SandboxTerminalProps {
 export function SandboxTerminal({
   pod,
   container,
+  namespace,
   workspace = '/workspace',
 }: SandboxTerminalProps): React.ReactNode {
   const [sessions, setSessions] = useState<string[] | null>(null);
@@ -1439,6 +1640,7 @@ export function SandboxTerminal({
               <Icon icon="mdi:plus" />
             </IconButton>
           </Tooltip>
+          <AccountSwitcher pod={pod} container={container} namespace={namespace} />
           <Tooltip title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
             <IconButton
               aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}

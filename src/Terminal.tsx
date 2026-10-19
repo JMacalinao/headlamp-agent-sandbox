@@ -58,7 +58,6 @@ import {
   prepareCodexHomeCommand,
   READ_ACCOUNTS_COMMAND,
   reconnectDelay,
-  restartStaleAgentsCommand,
   retype,
   scrollSteps,
   SHIFT_ENTER,
@@ -1219,17 +1218,15 @@ function stdinOf(b64: string): RunExecOptions {
   return b64 ? { input: { chunks: chunkBase64(b64), onProgress: () => {} } } : {};
 }
 
-/** Sets the sandbox's active Claude and Codex accounts; each tab catches up when it is shown. */
+/** Sets the sandbox's active Claude and Codex accounts. */
 function AccountSwitcher({
   pod,
   container,
   namespace,
-  onSwitched,
 }: {
   pod: Pod;
   container: string;
   namespace: string;
-  onSwitched: () => void;
 }): React.ReactNode {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [accounts, setAccounts] = useState<StoredAccount[] | null>(null);
@@ -1284,7 +1281,6 @@ function AccountSwitcher({
       );
       setCurrent(active => active && { ...active, [agent]: account?.id ?? DEFAULT_ACCOUNT });
       setPending(null);
-      onSwitched();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -1338,9 +1334,9 @@ function AccountSwitcher({
         <DialogContent>
           {error && <Alert severity="error">{error}</Alert>}
           <DialogContentText>
-            New {label} sessions in this sandbox will use {name}. A running {label} session restarts
-            onto it, resuming its conversation, the next time its tab is open while it is idle. The
-            prompt cache starts over, so the next turn on an API key costs more.
+            Every {label} started in this sandbox from now on uses {name}. One that is already
+            running keeps its account until you exit it and start it again;{' '}
+            <code>{pending?.agent} -c</code> picks the conversation back up.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
@@ -1427,25 +1423,6 @@ export function SandboxTerminal({
   const onLaunched = useCallback((session: string) => {
     setCommands(current => ({ ...current, [session]: undefined }));
   }, []);
-
-  // Only the shown tab's agent restarts onto a switched account, so a switch never restarts every
-  // agent at once; the poll catches a busy one once it goes idle.
-  const restartingRef = useRef(false);
-  const restartStale = useCallback(() => {
-    if (!active || restartingRef.current || document.visibilityState !== 'visible') {
-      return;
-    }
-    restartingRef.current = true;
-    void runExec(pod, container, restartStaleAgentsCommand(active)).then(() => {
-      restartingRef.current = false;
-    });
-  }, [pod, container, active]);
-
-  useEffect(() => {
-    restartStale();
-    const timer = setInterval(restartStale, SESSION_POLL_MS);
-    return () => clearInterval(timer);
-  }, [restartStale]);
 
   // tmux-resurrect restores a replacement pod's sessions well after this mounts, so keep listing.
   useEffect(() => {
@@ -1619,12 +1596,7 @@ export function SandboxTerminal({
               <Icon icon="mdi:plus" />
             </IconButton>
           </Tooltip>
-          <AccountSwitcher
-            pod={pod}
-            container={container}
-            namespace={namespace}
-            onSwitched={restartStale}
-          />
+          <AccountSwitcher pod={pod} container={container} namespace={namespace} />
           <Tooltip title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
             <IconButton
               aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}

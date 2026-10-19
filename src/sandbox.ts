@@ -1,7 +1,7 @@
 import { ApiProxy, ConfigStore } from '@kinvolk/headlamp-plugin/lib';
 import { makeCustomResourceClass } from '@kinvolk/headlamp-plugin/lib/Crd';
 import type { KubeObject, KubeObjectClass } from '@kinvolk/headlamp-plugin/lib/lib/k8s/KubeObject';
-import { type Account, type AccountAgent, type AccountKind, launchCommand } from './exec';
+import { type Account, type AccountAgent, type AccountKind } from './exec';
 
 const SANDBOX_API = '/apis/agents.x-k8s.io/v1beta1';
 const TEMPLATE_API = '/apis/extensions.agents.x-k8s.io/v1beta1';
@@ -146,8 +146,8 @@ export interface AgentLauncher {
 }
 
 export const AGENTS: AgentLauncher[] = [
-  { id: 'claude', label: 'Claude Code', command: launchCommand('claude') },
-  { id: 'codex', label: 'Codex', command: launchCommand('codex') },
+  { id: 'claude', label: 'Claude Code', command: 'claude' },
+  { id: 'codex', label: 'Codex', command: 'codex' },
   { id: 'opencode', label: 'opencode', command: 'opencode' },
   { id: 'hermes', label: 'Hermes', command: 'hermes' },
   { id: 'shell', label: 'Shell', command: undefined },

@@ -33,12 +33,10 @@ import {
   WHEEL_DOWN,
   unwrapRows,
   mouseReport,
-  launchCommand,
   accountEnvFile,
   writeAccountEnvCommand,
   prepareCodexHomeCommand,
   parseAccounts,
-  restartStaleAgentsCommand,
 } from '../src/exec.ts';
 
 test('frame/unframe round-trip with a 0 byte and multi-byte UTF-8', () => {
@@ -427,26 +425,15 @@ test('mouseReport builds SGR left-button reports', () => {
   assert.equal(mouseReport('release', 4, 7), '\u001b[<0;4;7m');
 });
 
-test('launchCommand sources the active account file in a subshell', () => {
-  assert.equal(launchCommand('claude'), '(. ~/.accounts/claude.env 2>/dev/null; claude)');
-  assert.equal(
-    launchCommand('codex', 'resume --last'),
-    '(. ~/.accounts/codex.env 2>/dev/null; codex resume --last)'
-  );
-});
-
 test('accountEnvFile sets one Claude credential and unsets the other', () => {
-  assert.equal(
-    accountEnvFile(null, ''),
-    '# account: default\nexport HEADLAMP_AGENT_ACCOUNT=default\n'
-  );
+  assert.equal(accountEnvFile(null, ''), '# account: default\n');
   assert.equal(
     accountEnvFile({ id: 'work', agent: 'claude', kind: 'subscription' }, ' tok\n'),
-    "# account: work\nexport HEADLAMP_AGENT_ACCOUNT=work\nunset ANTHROPIC_API_KEY\nexport CLAUDE_CODE_OAUTH_TOKEN='tok'\n"
+    "# account: work\nunset ANTHROPIC_API_KEY\nexport CLAUDE_CODE_OAUTH_TOKEN='tok'\n"
   );
   assert.equal(
     accountEnvFile({ id: 'api', agent: 'claude', kind: 'api' }, "a'b"),
-    "# account: api\nexport HEADLAMP_AGENT_ACCOUNT=api\nunset CLAUDE_CODE_OAUTH_TOKEN\nexport ANTHROPIC_API_KEY='a'\\''b'\n"
+    "# account: api\nunset CLAUDE_CODE_OAUTH_TOKEN\nexport ANTHROPIC_API_KEY='a'\\''b'\n"
   );
 });
 
@@ -454,11 +441,11 @@ test('accountEnvFile points Codex at the account home and logs a subscription in
   const home = 'export CODEX_HOME="$HOME/.codex-accounts/me"\n';
   assert.equal(
     accountEnvFile({ id: 'me', agent: 'codex', kind: 'api' }, 'sk'),
-    `# account: me\nexport HEADLAMP_AGENT_ACCOUNT=me\n${home}`
+    `# account: me\n${home}`
   );
   assert.equal(
     accountEnvFile({ id: 'me', agent: 'codex', kind: 'subscription' }, ''),
-    `# account: me\nexport HEADLAMP_AGENT_ACCOUNT=me\n${home}[ -f "$CODEX_HOME/auth.json" ] || codex login --device-auth\n`
+    `# account: me\n${home}[ -f "$CODEX_HOME/auth.json" ] || command codex login --device-auth\n`
   );
 });
 
@@ -470,7 +457,6 @@ test('account commands keep the credential out of argv', () => {
   const codex = prepareCodexHomeCommand('me', 8);
   assert.deepEqual(codex.slice(3), ['sh', 'me', '8']);
   assert.match(codex[2], /codex login --with-api-key/);
-  assert.deepEqual(restartStaleAgentsCommand('claude-2').slice(3), ['sh', 'claude-2']);
 });
 
 test('parseAccounts falls back to default for a missing file', () => {

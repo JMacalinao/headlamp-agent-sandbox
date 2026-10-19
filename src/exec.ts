@@ -376,17 +376,11 @@ export interface Account {
 export const ACCOUNT_AGENTS: AccountAgent[] = ['claude', 'codex'];
 export const DEFAULT_ACCOUNT = 'default';
 
-// The sandbox's active account per agent is a file every plugin launch sources in a subshell, so
-// the tab's shell keeps a clean environment and `claude` still resolves to the image's rc function.
-export function launchCommand(agent: AccountAgent, args = ''): string {
-  return `(. ~/.accounts/${agent}.env 2>/dev/null; ${agent}${args ? ` ${args}` : ''})`;
-}
-
+// The sandbox's active account per agent is a file the image rc's `claude` and `codex` functions
+// source in a subshell, so an agent started again after a switch picks it up.
 /** Contents of `~/.accounts/<agent>.env` for `account`, or for the pod's own env when null. */
 export function accountEnvFile(account: Account | null, credential: string): string {
-  const id = account?.id ?? DEFAULT_ACCOUNT;
-  // The marker lands in the agent's environment, which is how a restart tells it is stale.
-  const head = `# account: ${id}\nexport HEADLAMP_AGENT_ACCOUNT=${id}\n`;
+  const head = `# account: ${account?.id ?? DEFAULT_ACCOUNT}\n`;
   if (!account) {
     return head;
   }
@@ -401,7 +395,8 @@ export function accountEnvFile(account: Account | null, credential: string): str
   const home = `export CODEX_HOME="$HOME/.codex-accounts/${account.id}"\n`;
   return account.kind === 'api'
     ? head + home
-    : `${head}${home}[ -f "$CODEX_HOME/auth.json" ] || codex login --device-auth\n`;
+    : // `command`: inside the rc's `codex` function a bare `codex` would source this file again.
+      `${head}${home}[ -f "$CODEX_HOME/auth.json" ] || command codex login --device-auth\n`;
 }
 
 // The file holds a credential, so it comes in on stdin (base64, exact length as for uploads),
@@ -454,62 +449,4 @@ export function parseAccounts(stdout: string): Record<AccountAgent, string> {
     }
   }
   return active;
-}
-
-// Restarts a Claude or Codex agent in tmux session `session` that started under another account
-// than its agent's file now names, resuming the exact conversation. Each launch exports
-// HEADLAMP_AGENT_ACCOUNT, so the account an agent started with is in its environment; an agent
-// without it predates accounts and counts as default. A file without the export predates the
-// marker too, so it never matches and its agents are left alone rather than restarted forever. Claude names its pane, conversation and
-// busy state in ~/.claude/sessions/<pid>.json (its binary resolves to claude/versions/<version>);
-// Codex keeps its rollout file, named after the session id, open. A busy agent is left for the
-// next call, so a turn is never cut off and nothing waits on it.
-// ponytail: Codex has no busy flag, so "idle" is a rollout file untouched for 10s; a long silent
-// tool call can look idle. Upgrade if Codex ever exposes its turn state.
-const RESTART_SCRIPT = `
-session=$1
-want() {
-  f="$HOME/.accounts/$1.env"
-  [ -f "$f" ] || { echo default; return; }
-  sed -n 's/^export HEADLAMP_AGENT_ACCOUNT=//p' "$f"
-}
-have() { h=$(tr '\\0' '\\n' < "/proc/$1/environ" 2>/dev/null | sed -n 's/^HEADLAMP_AGENT_ACCOUNT=//p'); echo "\${h:-default}"; }
-restart() {
-  agent=$1 pane=$2 pid=$3 resume=$4
-  w=$(want "$agent")
-  [ -n "$w" ] && [ "$(have "$pid")" != "$w" ] || return 0
-  if [ "$agent" = claude ]; then quit=/exit; else quit=/quit; fi
-  tmux send-keys -t "$pane" C-c; sleep 0.5
-  tmux send-keys -t "$pane" -l "$quit"; sleep 0.5
-  tmux send-keys -t "$pane" Enter
-  n=0
-  while [ -d "/proc/$pid" ]; do
-    n=$((n + 1))
-    [ $n -lt 30 ] || { echo "$agent did not exit"; return 0; }
-    sleep 0.5
-  done
-  sleep 0.5
-  tmux send-keys -t "$pane" -l "(. ~/.accounts/$agent.env 2>/dev/null; $agent $resume)"
-  tmux send-keys -t "$pane" Enter
-  echo "$agent restarted"
-}
-for f in $(grep -l -F "\\"tmux\\":\\"$session:" "$HOME"/.claude/sessions/*.json 2>/dev/null); do
-  set -- $(jq -r '"\\(.pid) \\(.sessionId) \\(.status) \\(.tmux)"' "$f" 2>/dev/null)
-  case "$(readlink "/proc/$1/exe" 2>/dev/null)" in */claude | */claude/versions/*) ;; *) continue ;; esac
-  [ "$3" = busy ] && continue
-  restart claude "\${4##*.}" "$1" "--resume $2"
-done
-for p in /proc/[0-9]*; do
-  case "$(readlink "$p/exe" 2>/dev/null)" in */codex) ;; *) continue ;; esac
-  pane=$(tr '\\0' '\\n' < "$p/environ" 2>/dev/null | sed -n 's/^TMUX_PANE=//p')
-  [ -n "$pane" ] && [ "$(tmux display -p -t "$pane" '#S' 2>/dev/null)" = "$session" ] || continue
-  rollout=$(for f in "$p"/fd/*; do readlink "$f"; done 2>/dev/null | grep 'rollout-.*\\.jsonl$' | head -n 1)
-  [ -n "$rollout" ] && [ $(($(date +%s) - $(stat -c %Y "$rollout" 2>/dev/null || echo 0))) -lt 10 ] && continue
-  id=$(printf %s "$rollout" | sed -n 's/.*\\([0-9a-f]\\{8\\}\\(-[0-9a-f]\\{4\\}\\)\\{3\\}-[0-9a-f]\\{12\\}\\)\\.jsonl$/\\1/p')
-  restart codex "$pane" "\${p#/proc/}" "\${id:+resume $id}"
-done
-`;
-
-export function restartStaleAgentsCommand(session: string): string[] {
-  return ['sh', '-c', RESTART_SCRIPT, 'sh', session];
 }

@@ -38,8 +38,7 @@ import {
   writeAccountEnvCommand,
   prepareCodexHomeCommand,
   parseAccounts,
-  restartAgentsCommand,
-  parseRestarts,
+  restartStaleAgentsCommand,
 } from '../src/exec.ts';
 
 test('frame/unframe round-trip with a 0 byte and multi-byte UTF-8', () => {
@@ -437,14 +436,17 @@ test('launchCommand sources the active account file in a subshell', () => {
 });
 
 test('accountEnvFile sets one Claude credential and unsets the other', () => {
-  assert.equal(accountEnvFile(null, ''), '# account: default\n');
+  assert.equal(
+    accountEnvFile(null, ''),
+    '# account: default\nexport HEADLAMP_AGENT_ACCOUNT=default\n'
+  );
   assert.equal(
     accountEnvFile({ id: 'work', agent: 'claude', kind: 'subscription' }, ' tok\n'),
-    "# account: work\nunset ANTHROPIC_API_KEY\nexport CLAUDE_CODE_OAUTH_TOKEN='tok'\n"
+    "# account: work\nexport HEADLAMP_AGENT_ACCOUNT=work\nunset ANTHROPIC_API_KEY\nexport CLAUDE_CODE_OAUTH_TOKEN='tok'\n"
   );
   assert.equal(
     accountEnvFile({ id: 'api', agent: 'claude', kind: 'api' }, "a'b"),
-    "# account: api\nunset CLAUDE_CODE_OAUTH_TOKEN\nexport ANTHROPIC_API_KEY='a'\\''b'\n"
+    "# account: api\nexport HEADLAMP_AGENT_ACCOUNT=api\nunset CLAUDE_CODE_OAUTH_TOKEN\nexport ANTHROPIC_API_KEY='a'\\''b'\n"
   );
 });
 
@@ -452,11 +454,11 @@ test('accountEnvFile points Codex at the account home and logs a subscription in
   const home = 'export CODEX_HOME="$HOME/.codex-accounts/me"\n';
   assert.equal(
     accountEnvFile({ id: 'me', agent: 'codex', kind: 'api' }, 'sk'),
-    `# account: me\n${home}`
+    `# account: me\nexport HEADLAMP_AGENT_ACCOUNT=me\n${home}`
   );
   assert.equal(
     accountEnvFile({ id: 'me', agent: 'codex', kind: 'subscription' }, ''),
-    `# account: me\n${home}[ -f "$CODEX_HOME/auth.json" ] || codex login --device-auth\n`
+    `# account: me\nexport HEADLAMP_AGENT_ACCOUNT=me\n${home}[ -f "$CODEX_HOME/auth.json" ] || codex login --device-auth\n`
   );
 });
 
@@ -468,7 +470,7 @@ test('account commands keep the credential out of argv', () => {
   const codex = prepareCodexHomeCommand('me', 8);
   assert.deepEqual(codex.slice(3), ['sh', 'me', '8']);
   assert.match(codex[2], /codex login --with-api-key/);
-  assert.deepEqual(restartAgentsCommand('codex').slice(3), ['sh', 'codex']);
+  assert.deepEqual(restartStaleAgentsCommand('claude-2').slice(3), ['sh', 'claude-2']);
 });
 
 test('parseAccounts falls back to default for a missing file', () => {
@@ -476,11 +478,4 @@ test('parseAccounts falls back to default for a missing file', () => {
     claude: 'work',
     codex: 'default',
   });
-});
-
-test('parseRestarts reads one line per session', () => {
-  assert.deepEqual(parseRestarts('claude\trestarted\nclaude-2\tdid not exit, not restarted\n'), [
-    { session: 'claude', result: 'restarted' },
-    { session: 'claude-2', result: 'did not exit, not restarted' },
-  ]);
 });

@@ -6,14 +6,12 @@ import {
   Alert,
   Box,
   Button,
-  Checkbox,
   CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
-  FormControlLabel,
   IconButton,
   LinearProgress,
   ListItemIcon,
@@ -55,13 +53,12 @@ import {
   mergeTitles,
   mouseReport,
   parseAccounts,
-  parseRestarts,
   parseSessions,
   parseStatus,
   prepareCodexHomeCommand,
   READ_ACCOUNTS_COMMAND,
   reconnectDelay,
-  restartAgentsCommand,
+  restartStaleAgentsCommand,
   retype,
   scrollSteps,
   SHIFT_ENTER,
@@ -1222,15 +1219,17 @@ function stdinOf(b64: string): RunExecOptions {
   return b64 ? { input: { chunks: chunkBase64(b64), onProgress: () => {} } } : {};
 }
 
-/** Sets the sandbox's active Claude and Codex accounts and restarts running agents onto them. */
+/** Sets the sandbox's active Claude and Codex accounts; each tab catches up when it is shown. */
 function AccountSwitcher({
   pod,
   container,
   namespace,
+  onSwitched,
 }: {
   pod: Pod;
   container: string;
   namespace: string;
+  onSwitched: () => void;
 }): React.ReactNode {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [accounts, setAccounts] = useState<StoredAccount[] | null>(null);
@@ -1240,9 +1239,7 @@ function AccountSwitcher({
     agent: AccountAgent;
     account: StoredAccount | null;
   } | null>(null);
-  const [restart, setRestart] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [results, setResults] = useState<{ session: string; result: string }[] | null>(null);
 
   // Read on every open: another browser may have switched the sandbox since.
   async function open(target: HTMLElement): Promise<void> {
@@ -1264,8 +1261,6 @@ function AccountSwitcher({
   function choose(agent: AccountAgent, account: StoredAccount | null): void {
     setAnchor(null);
     setError(null);
-    setResults(null);
-    setRestart(true);
     setPending({ agent, account });
   }
 
@@ -1288,12 +1283,8 @@ function AccountSwitcher({
         runExec(pod, container, writeAccountEnvCommand(agent, env.length), stdinOf(env))
       );
       setCurrent(active => active && { ...active, [agent]: account?.id ?? DEFAULT_ACCOUNT });
-      if (restart) {
-        const result = await succeeded(runExec(pod, container, restartAgentsCommand(agent)));
-        setResults(parseRestarts(result.stdout));
-      } else {
-        setPending(null);
-      }
+      setPending(null);
+      onSwitched();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -1346,50 +1337,19 @@ function AccountSwitcher({
         </DialogTitle>
         <DialogContent>
           {error && <Alert severity="error">{error}</Alert>}
-          {results ? (
-            results.length ? (
-              results.map(({ session, result }) => (
-                <DialogContentText key={session}>
-                  {session}: {result}
-                </DialogContentText>
-              ))
-            ) : (
-              <DialogContentText>No running {label} sessions to restart.</DialogContentText>
-            )
-          ) : (
-            <>
-              <DialogContentText>
-                New {label} sessions in this sandbox will use {name}.
-              </DialogContentText>
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={restart}
-                    onChange={event => setRestart(event.target.checked)}
-                  />
-                }
-                label={`Restart running ${label} sessions`}
-              />
-              <DialogContentText variant="body2">
-                Each session quits once it is idle and resumes its conversation under the new
-                account. The prompt cache starts over, so the next turn on an API key costs more.
-              </DialogContentText>
-            </>
-          )}
+          <DialogContentText>
+            New {label} sessions in this sandbox will use {name}. A running {label} session restarts
+            onto it, resuming its conversation, the next time its tab is open while it is idle. The
+            prompt cache starts over, so the next turn on an API key costs more.
+          </DialogContentText>
         </DialogContent>
         <DialogActions>
-          {results ? (
-            <Button onClick={() => setPending(null)}>Close</Button>
-          ) : (
-            <>
-              <Button disabled={busy} onClick={() => setPending(null)}>
-                Cancel
-              </Button>
-              <Button disabled={busy} onClick={() => void apply()}>
-                {busy ? <CircularProgress size={20} /> : 'Switch'}
-              </Button>
-            </>
-          )}
+          <Button disabled={busy} onClick={() => setPending(null)}>
+            Cancel
+          </Button>
+          <Button disabled={busy} onClick={() => void apply()}>
+            {busy ? <CircularProgress size={20} /> : 'Switch'}
+          </Button>
         </DialogActions>
       </Dialog>
     </>
@@ -1467,6 +1427,25 @@ export function SandboxTerminal({
   const onLaunched = useCallback((session: string) => {
     setCommands(current => ({ ...current, [session]: undefined }));
   }, []);
+
+  // Only the shown tab's agent restarts onto a switched account, so a switch never restarts every
+  // agent at once; the poll catches a busy one once it goes idle.
+  const restartingRef = useRef(false);
+  const restartStale = useCallback(() => {
+    if (!active || restartingRef.current || document.visibilityState !== 'visible') {
+      return;
+    }
+    restartingRef.current = true;
+    void runExec(pod, container, restartStaleAgentsCommand(active)).then(() => {
+      restartingRef.current = false;
+    });
+  }, [pod, container, active]);
+
+  useEffect(() => {
+    restartStale();
+    const timer = setInterval(restartStale, SESSION_POLL_MS);
+    return () => clearInterval(timer);
+  }, [restartStale]);
 
   // tmux-resurrect restores a replacement pod's sessions well after this mounts, so keep listing.
   useEffect(() => {
@@ -1640,7 +1619,12 @@ export function SandboxTerminal({
               <Icon icon="mdi:plus" />
             </IconButton>
           </Tooltip>
-          <AccountSwitcher pod={pod} container={container} namespace={namespace} />
+          <AccountSwitcher
+            pod={pod}
+            container={container}
+            namespace={namespace}
+            onSwitched={restartStale}
+          />
           <Tooltip title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
             <IconButton
               aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}

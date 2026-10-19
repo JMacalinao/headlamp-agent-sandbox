@@ -384,7 +384,9 @@ export function launchCommand(agent: AccountAgent, args = ''): string {
 
 /** Contents of `~/.accounts/<agent>.env` for `account`, or for the pod's own env when null. */
 export function accountEnvFile(account: Account | null, credential: string): string {
-  const head = `# account: ${account?.id ?? DEFAULT_ACCOUNT}\n`;
+  const id = account?.id ?? DEFAULT_ACCOUNT;
+  // The marker lands in the agent's environment, which is how a restart tells it is stale.
+  const head = `# account: ${id}\nexport HEADLAMP_AGENT_ACCOUNT=${id}\n`;
   if (!account) {
     return head;
   }
@@ -454,73 +456,60 @@ export function parseAccounts(stdout: string): Record<AccountAgent, string> {
   return active;
 }
 
-// Restarts every running `agent` in every tmux pane, in parallel, under the account file just
-// written, resuming the exact conversation. Claude names its pane and conversation in
-// ~/.claude/sessions/<pid>.json (its binary resolves to claude/versions/<version>); Codex keeps its rollout file (named after the session id) open.
-// Prints one `<session>\t<result>` line per pane.
+// Restarts a Claude or Codex agent in tmux session `session` that started under another account
+// than its agent's file now names, resuming the exact conversation. Each launch exports
+// HEADLAMP_AGENT_ACCOUNT, so the account an agent started with is in its environment; an agent
+// without it predates accounts and counts as default. A file without the export predates the
+// marker too, so it never matches and its agents are left alone rather than restarted forever. Claude names its pane, conversation and
+// busy state in ~/.claude/sessions/<pid>.json (its binary resolves to claude/versions/<version>);
+// Codex keeps its rollout file, named after the session id, open. A busy agent is left for the
+// next call, so a turn is never cut off and nothing waits on it.
 // ponytail: Codex has no busy flag, so "idle" is a rollout file untouched for 10s; a long silent
 // tool call can look idle. Upgrade if Codex ever exposes its turn state.
 const RESTART_SCRIPT = `
-agent=$1
+session=$1
+want() {
+  f="$HOME/.accounts/$1.env"
+  [ -f "$f" ] || { echo default; return; }
+  sed -n 's/^export HEADLAMP_AGENT_ACCOUNT=//p' "$f"
+}
+have() { h=$(tr '\\0' '\\n' < "/proc/$1/environ" 2>/dev/null | sed -n 's/^HEADLAMP_AGENT_ACCOUNT=//p'); echo "\${h:-default}"; }
 restart() {
-  pane=$1 pid=$2 id=$3 rollout=$4
-  name=$(tmux display -p -t "$pane" '#S' 2>/dev/null) || return 0
-  n=0
-  while :; do
-    if [ "$agent" = claude ]; then
-      [ "$(jq -r .status "$HOME/.claude/sessions/$pid.json" 2>/dev/null)" = busy ] || break
-    else
-      [ -n "$rollout" ] && [ $(($(date +%s) - $(stat -c %Y "$rollout" 2>/dev/null || echo 0))) -lt 10 ] || break
-    fi
-    n=$((n + 1))
-    [ $n -lt 600 ] || { printf '%s\\tstill busy after 10 minutes, not restarted\\n' "$name"; return 0; }
-    sleep 1
-  done
-  if [ "$agent" = claude ]; then quit=/exit; resume="--resume $id"; else quit=/quit; resume=\${id:+resume $id}; fi
+  agent=$1 pane=$2 pid=$3 resume=$4
+  w=$(want "$agent")
+  [ -n "$w" ] && [ "$(have "$pid")" != "$w" ] || return 0
+  if [ "$agent" = claude ]; then quit=/exit; else quit=/quit; fi
   tmux send-keys -t "$pane" C-c; sleep 0.5
   tmux send-keys -t "$pane" -l "$quit"; sleep 0.5
   tmux send-keys -t "$pane" Enter
   n=0
   while [ -d "/proc/$pid" ]; do
     n=$((n + 1))
-    [ $n -lt 30 ] || { printf '%s\\tdid not exit, not restarted\\n' "$name"; return 0; }
+    [ $n -lt 30 ] || { echo "$agent did not exit"; return 0; }
     sleep 0.5
   done
   sleep 0.5
-  tmux send-keys -t "$pane" -l "(. ~/.accounts/$agent.env 2>/dev/null; $agent \${resume:-})"
+  tmux send-keys -t "$pane" -l "(. ~/.accounts/$agent.env 2>/dev/null; $agent $resume)"
   tmux send-keys -t "$pane" Enter
-  printf '%s\\trestarted\\n' "$name"
+  echo "$agent restarted"
 }
-if [ "$agent" = claude ]; then
-  for f in "$HOME"/.claude/sessions/*.json; do
-    set -- $(jq -r '"\\(.pid) \\(.sessionId) \\(.tmux // "")"' "$f" 2>/dev/null)
-    [ -n "\${3:-}" ] || continue
-    case "$(readlink "/proc/$1/exe" 2>/dev/null)" in */claude | */claude/versions/*) ;; *) continue ;; esac
-    restart "\${3##*.}" "$1" "$2" "" &
-  done
-else
-  for p in /proc/[0-9]*; do
-    case "$(readlink "$p/exe" 2>/dev/null)" in */codex) ;; *) continue ;; esac
-    pane=$(tr '\\0' '\\n' < "$p/environ" 2>/dev/null | sed -n 's/^TMUX_PANE=//p')
-    [ -n "$pane" ] || continue
-    rollout=$(for f in "$p"/fd/*; do readlink "$f"; done 2>/dev/null | grep 'rollout-.*\\.jsonl$' | head -n 1)
-    id=$(printf %s "$rollout" | sed -n 's/.*\\([0-9a-f]\\{8\\}\\(-[0-9a-f]\\{4\\}\\)\\{3\\}-[0-9a-f]\\{12\\}\\)\\.jsonl$/\\1/p')
-    restart "$pane" "\${p#/proc/}" "$id" "$rollout" &
-  done
-fi
-wait
+for f in $(grep -l -F "\\"tmux\\":\\"$session:" "$HOME"/.claude/sessions/*.json 2>/dev/null); do
+  set -- $(jq -r '"\\(.pid) \\(.sessionId) \\(.status) \\(.tmux)"' "$f" 2>/dev/null)
+  case "$(readlink "/proc/$1/exe" 2>/dev/null)" in */claude | */claude/versions/*) ;; *) continue ;; esac
+  [ "$3" = busy ] && continue
+  restart claude "\${4##*.}" "$1" "--resume $2"
+done
+for p in /proc/[0-9]*; do
+  case "$(readlink "$p/exe" 2>/dev/null)" in */codex) ;; *) continue ;; esac
+  pane=$(tr '\\0' '\\n' < "$p/environ" 2>/dev/null | sed -n 's/^TMUX_PANE=//p')
+  [ -n "$pane" ] && [ "$(tmux display -p -t "$pane" '#S' 2>/dev/null)" = "$session" ] || continue
+  rollout=$(for f in "$p"/fd/*; do readlink "$f"; done 2>/dev/null | grep 'rollout-.*\\.jsonl$' | head -n 1)
+  [ -n "$rollout" ] && [ $(($(date +%s) - $(stat -c %Y "$rollout" 2>/dev/null || echo 0))) -lt 10 ] && continue
+  id=$(printf %s "$rollout" | sed -n 's/.*\\([0-9a-f]\\{8\\}\\(-[0-9a-f]\\{4\\}\\)\\{3\\}-[0-9a-f]\\{12\\}\\)\\.jsonl$/\\1/p')
+  restart codex "$pane" "\${p#/proc/}" "\${id:+resume $id}"
+done
 `;
 
-export function restartAgentsCommand(agent: AccountAgent): string[] {
-  return ['sh', '-c', RESTART_SCRIPT, 'sh', agent];
-}
-
-export function parseRestarts(stdout: string): { session: string; result: string }[] {
-  return stdout
-    .split('\n')
-    .filter(line => line.includes('\t'))
-    .map(line => {
-      const [session, result] = line.split('\t');
-      return { session, result };
-    });
+export function restartStaleAgentsCommand(session: string): string[] {
+  return ['sh', '-c', RESTART_SCRIPT, 'sh', session];
 }

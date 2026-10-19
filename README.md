@@ -20,8 +20,8 @@ A [Headlamp](https://headlamp.dev/) plugin for
   scrolls tmux history, and the row stays above the on-screen keyboard.
 - `Shift+Enter` sends `ESC CR`, which Claude Code reads as a newline.
 - Several Claude Code and Codex accounts, by subscription or API key. Each
-  sandbox runs one active account per agent, and switching can restart the
-  running agents onto it. See [Accounts](#accounts).
+  sandbox runs one active account per agent, and a running agent moves to it
+  when you next open its tab. See [Accounts](#accounts).
 - Launching an agent types its name into the shell, so shell functions apply
   and you land back at a prompt when it exits.
 - JetBrainsMono Nerd Font is bundled, so every device draws the same glyphs.
@@ -70,9 +70,12 @@ writes `~/.accounts/<agent>.env` in the pod (mode 600), and every Claude Code
 or Codex session the plugin opens sources it. A `claude` you type by hand in a
 shell tab still uses the pod's environment.
 
-With "Restart running sessions" checked, each running agent quits once it is
-idle and resumes the same conversation under the new account. The prompt cache
-starts over, so the first turn after a switch on an API key costs more.
+A running agent restarts onto the new account the next time its tab is open
+while it is idle, and resumes the same conversation. Each launch exports
+`HEADLAMP_AGENT_ACCOUNT`, which is how the terminal tells an agent started
+under another account. Only the open tab restarts, and a busy agent is left
+alone until it finishes. The prompt cache starts over, so the first turn after
+a switch on an API key costs more.
 
 A Codex account gets its own `CODEX_HOME` under `~/.codex-accounts/<name>`,
 with everything except `auth.json` linked from the main one. A subscription

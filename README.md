@@ -19,6 +19,9 @@ A [Headlamp](https://headlamp.dev/) plugin for
   the tmux prefix, sticky `Ctrl` and `Shift`, upload, and fullscreen. Dragging
   scrolls tmux history, and the row stays above the on-screen keyboard.
 - `Shift+Enter` sends `ESC CR`, which Claude Code reads as a newline.
+- Several Claude Code and Codex accounts, by subscription or API key. Each
+  sandbox runs one active account per agent, and switching can restart the
+  running agents onto it. See [Accounts](#accounts).
 - Launching an agent types its name into the shell, so shell functions apply
   and you land back at a prompt when it exits.
 - JetBrainsMono Nerd Font is bundled, so every device draws the same glyphs.
@@ -33,8 +36,10 @@ your own Headlamp session and RBAC.
 - Headlamp v0.45 or newer.
 - The agent-sandbox controller and its `Sandbox` CRD.
 - RBAC in the sandbox namespace: `sandboxes` (list, get, create, update,
-  delete), and `pods` and `pods/exec` (get, list, create).
-- `tmux`, `base64`, `head` and `mv` in the sandbox image.
+  delete), `pods` and `pods/exec` (get, list, create), and `secrets` (get,
+  list, create, delete) for accounts.
+- `tmux`, `base64`, `head` and `mv` in the sandbox image, plus `jq` for
+  restarting Claude Code onto another account.
 
 ## Settings
 
@@ -45,6 +50,39 @@ your own Headlamp session and RBAC.
 
 The create dialog has no pod spec editor. The template stays owned by whatever
 manages it, such as a GitOps repository.
+
+## Accounts
+
+Sandboxes > Accounts lists the accounts. Each one is a Secret named
+`agent-account-<name>` in the plugin namespace, labeled
+`headlamp-agent-sandbox/account=true`, so every sandbox can use it.
+
+| Account                   | What to paste                        |
+| ------------------------- | ------------------------------------ |
+| Claude Code, subscription | The token from `claude setup-token`. |
+| Claude Code, API key      | An Anthropic API key.                |
+| Codex, subscription       | Nothing. See below.                  |
+| Codex, API key            | An OpenAI API key.                   |
+
+The terminal's Accounts button sets the sandbox's active account for each
+agent. "Default" is whatever the pod's own environment provides. Switching
+writes `~/.accounts/<agent>.env` in the pod (mode 600), and every Claude Code
+or Codex session the plugin opens sources it. A `claude` you type by hand in a
+shell tab still uses the pod's environment.
+
+With "Restart running sessions" checked, each running agent quits once it is
+idle and resumes the same conversation under the new account. The prompt cache
+starts over, so the first turn after a switch on an API key costs more.
+
+A Codex account gets its own `CODEX_HOME` under `~/.codex-accounts/<name>`,
+with everything except `auth.json` linked from the main one. A subscription
+logs in with `codex login --device-auth` the first time it runs in a sandbox,
+and the login stays in that sandbox. It is not kept in the Secret because Codex
+rotates its refresh token, and a shared copy stops working once any sandbox
+refreshes it. Device code login has to be turned on in the ChatGPT security
+settings.
+
+Claude Code asks once to approve a new API key.
 
 ## Installing
 

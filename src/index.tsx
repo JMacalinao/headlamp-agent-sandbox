@@ -24,6 +24,7 @@ import {
 } from '@kinvolk/headlamp-plugin/lib';
 import { Stack, TextField } from '@mui/material';
 import { type ReactNode } from 'react';
+import { AccountList } from './Accounts';
 import { SandboxDetail, SandboxList } from './Dashboard';
 import { DEFAULT_CONFIG, PLUGIN_NAME } from './sandbox';
 
@@ -40,6 +41,21 @@ registerSidebarEntry({
   name: 'sandbox-list',
   label: 'Sandboxes',
   url: '/agent-sandbox',
+});
+
+registerSidebarEntry({
+  parent: 'sandboxes',
+  name: 'sandbox-accounts',
+  label: 'Accounts',
+  url: '/agent-sandbox-accounts',
+});
+
+registerRoute({
+  path: '/agent-sandbox-accounts',
+  name: 'sandbox-accounts',
+  exact: true,
+  sidebar: 'sandbox-accounts',
+  component: AccountList,
 });
 
 registerRoute({

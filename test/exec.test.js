@@ -33,6 +33,13 @@ import {
   WHEEL_DOWN,
   unwrapRows,
   mouseReport,
+  launchCommand,
+  accountEnvFile,
+  writeAccountEnvCommand,
+  prepareCodexHomeCommand,
+  parseAccounts,
+  restartAgentsCommand,
+  parseRestarts,
 } from '../src/exec.ts';
 
 test('frame/unframe round-trip with a 0 byte and multi-byte UTF-8', () => {
@@ -419,4 +426,61 @@ test('mouseReport builds SGR left-button reports', () => {
   assert.equal(mouseReport('press', 3, 7), '\u001b[<0;3;7M');
   assert.equal(mouseReport('drag', 4, 7), '\u001b[<32;4;7M');
   assert.equal(mouseReport('release', 4, 7), '\u001b[<0;4;7m');
+});
+
+test('launchCommand sources the active account file in a subshell', () => {
+  assert.equal(launchCommand('claude'), '(. ~/.accounts/claude.env 2>/dev/null; claude)');
+  assert.equal(
+    launchCommand('codex', 'resume --last'),
+    '(. ~/.accounts/codex.env 2>/dev/null; codex resume --last)'
+  );
+});
+
+test('accountEnvFile sets one Claude credential and unsets the other', () => {
+  assert.equal(accountEnvFile(null, ''), '# account: default\n');
+  assert.equal(
+    accountEnvFile({ id: 'work', agent: 'claude', kind: 'subscription' }, ' tok\n'),
+    "# account: work\nunset ANTHROPIC_API_KEY\nexport CLAUDE_CODE_OAUTH_TOKEN='tok'\n"
+  );
+  assert.equal(
+    accountEnvFile({ id: 'api', agent: 'claude', kind: 'api' }, "a'b"),
+    "# account: api\nunset CLAUDE_CODE_OAUTH_TOKEN\nexport ANTHROPIC_API_KEY='a'\\''b'\n"
+  );
+});
+
+test('accountEnvFile points Codex at the account home and logs a subscription in once', () => {
+  const home = 'export CODEX_HOME="$HOME/.codex-accounts/me"\n';
+  assert.equal(
+    accountEnvFile({ id: 'me', agent: 'codex', kind: 'api' }, 'sk'),
+    `# account: me\n${home}`
+  );
+  assert.equal(
+    accountEnvFile({ id: 'me', agent: 'codex', kind: 'subscription' }, ''),
+    `# account: me\n${home}[ -f "$CODEX_HOME/auth.json" ] || codex login --device-auth\n`
+  );
+});
+
+test('account commands keep the credential out of argv', () => {
+  const env = writeAccountEnvCommand('claude', 12);
+  assert.deepEqual(env.slice(3), ['sh', 'claude', '12']);
+  assert.match(env[2], /umask 077/);
+  assert.match(env[2], /head -c "\$2"/);
+  const codex = prepareCodexHomeCommand('me', 8);
+  assert.deepEqual(codex.slice(3), ['sh', 'me', '8']);
+  assert.match(codex[2], /codex login --with-api-key/);
+  assert.deepEqual(restartAgentsCommand('codex').slice(3), ['sh', 'codex']);
+});
+
+test('parseAccounts falls back to default for a missing file', () => {
+  assert.deepEqual(parseAccounts('claude\twork\n\ncodex\t\n\n'), {
+    claude: 'work',
+    codex: 'default',
+  });
+});
+
+test('parseRestarts reads one line per session', () => {
+  assert.deepEqual(parseRestarts('claude\trestarted\nclaude-2\tdid not exit, not restarted\n'), [
+    { session: 'claude', result: 'restarted' },
+    { session: 'claude-2', result: 'did not exit, not restarted' },
+  ]);
 });

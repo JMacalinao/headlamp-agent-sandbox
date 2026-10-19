@@ -362,3 +362,165 @@ function dedent(lines: Line[]): string[] {
 export function mouseReport(kind: 'press' | 'drag' | 'release', col: number, row: number): string {
   return `\x1b[<${kind === 'drag' ? 32 : 0};${col};${row}${kind === 'release' ? 'm' : 'M'}`;
 }
+
+export type AccountAgent = 'claude' | 'codex';
+export type AccountKind = 'subscription' | 'api';
+
+export interface Account {
+  /** DNS label chosen by the user; also the name shown in menus. */
+  id: string;
+  agent: AccountAgent;
+  kind: AccountKind;
+}
+
+export const ACCOUNT_AGENTS: AccountAgent[] = ['claude', 'codex'];
+export const DEFAULT_ACCOUNT = 'default';
+
+// The sandbox's active account per agent is a file every plugin launch sources in a subshell, so
+// the tab's shell keeps a clean environment and `claude` still resolves to the image's rc function.
+export function launchCommand(agent: AccountAgent, args = ''): string {
+  return `(. ~/.accounts/${agent}.env 2>/dev/null; ${agent}${args ? ` ${args}` : ''})`;
+}
+
+/** Contents of `~/.accounts/<agent>.env` for `account`, or for the pod's own env when null. */
+export function accountEnvFile(account: Account | null, credential: string): string {
+  const head = `# account: ${account?.id ?? DEFAULT_ACCOUNT}\n`;
+  if (!account) {
+    return head;
+  }
+  if (account.agent === 'claude') {
+    // The API key outranks the OAuth token in Claude's precedence, so each kind unsets the other.
+    const [set, unset] =
+      account.kind === 'api'
+        ? ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']
+        : ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
+    return `${head}unset ${unset}\nexport ${set}=${shQuote(credential.trim())}\n`;
+  }
+  const home = `export CODEX_HOME="$HOME/.codex-accounts/${account.id}"\n`;
+  return account.kind === 'api'
+    ? head + home
+    : `${head}${home}[ -f "$CODEX_HOME/auth.json" ] || codex login --device-auth\n`;
+}
+
+// The file holds a credential, so it comes in on stdin (base64, exact length as for uploads),
+// never in argv, and is only readable by its owner.
+export function writeAccountEnvCommand(agent: AccountAgent, b64len: number): string[] {
+  return [
+    'sh',
+    '-c',
+    'set -e; umask 077; d="$HOME/.accounts"; mkdir -p "$d"; b=$(head -c "$2"); ' +
+      '[ "${#b}" -eq "$2" ]; printf %s "$b" | base64 -d > "$d/$1.env.part"; ' +
+      'mv "$d/$1.env.part" "$d/$1.env"',
+    'sh',
+    agent,
+    String(b64len),
+  ];
+}
+
+// A Codex account gets its own CODEX_HOME for its auth.json. Everything else in the main home is
+// linked in, so config, AGENTS.md, skills and sessions stay shared and a resume can cross
+// accounts. An API key arrives on stdin (base64) and goes to `codex login`, which owns the format.
+export function prepareCodexHomeCommand(id: string, b64len: number): string[] {
+  return [
+    'sh',
+    '-c',
+    'set -e; umask 077; src="${CODEX_HOME:-$HOME/.codex}"; home="$HOME/.codex-accounts/$1"; ' +
+      'mkdir -p "$home"; for f in "$src"/* "$src"/.[!.]*; do ' +
+      '[ -e "$f" ] || continue; n="${f##*/}"; [ "$n" = auth.json ] && continue; ' +
+      '[ -e "$home/$n" ] || [ -L "$home/$n" ] || ln -s "$f" "$home/$n"; done; ' +
+      'if [ "$2" -gt 0 ]; then b=$(head -c "$2"); [ "${#b}" -eq "$2" ]; ' +
+      'printf %s "$b" | base64 -d | CODEX_HOME="$home" codex login --with-api-key >/dev/null; fi',
+    'sh',
+    id,
+    String(b64len),
+  ];
+}
+
+export const READ_ACCOUNTS_COMMAND: string[] = [
+  'sh',
+  '-c',
+  'for a in claude codex; do printf "%s\\t" "$a"; ' +
+    'sed -n "1s/^# account: //p" "$HOME/.accounts/$a.env" 2>/dev/null; echo; done',
+];
+
+export function parseAccounts(stdout: string): Record<AccountAgent, string> {
+  const active: Record<AccountAgent, string> = { claude: DEFAULT_ACCOUNT, codex: DEFAULT_ACCOUNT };
+  for (const line of stdout.split('\n')) {
+    const [agent, id = ''] = line.split('\t');
+    if ((agent === 'claude' || agent === 'codex') && id.trim()) {
+      active[agent] = id.trim();
+    }
+  }
+  return active;
+}
+
+// Restarts every running `agent` in every tmux pane, in parallel, under the account file just
+// written, resuming the exact conversation. Claude names its pane and conversation in
+// ~/.claude/sessions/<pid>.json; Codex keeps its rollout file (named after the session id) open.
+// Prints one `<session>\t<result>` line per pane.
+// ponytail: Codex has no busy flag, so "idle" is a rollout file untouched for 10s; a long silent
+// tool call can look idle. Upgrade if Codex ever exposes its turn state.
+const RESTART_SCRIPT = `
+agent=$1
+restart() {
+  pane=$1 pid=$2 id=$3 rollout=$4
+  name=$(tmux display -p -t "$pane" '#S' 2>/dev/null) || return 0
+  n=0
+  while :; do
+    if [ "$agent" = claude ]; then
+      [ "$(jq -r .status "$HOME/.claude/sessions/$pid.json" 2>/dev/null)" = busy ] || break
+    else
+      [ -n "$rollout" ] && [ $(($(date +%s) - $(stat -c %Y "$rollout" 2>/dev/null || echo 0))) -lt 10 ] || break
+    fi
+    n=$((n + 1))
+    [ $n -lt 600 ] || { printf '%s\\tstill busy after 10 minutes, not restarted\\n' "$name"; return 0; }
+    sleep 1
+  done
+  if [ "$agent" = claude ]; then quit=/exit; resume="--resume $id"; else quit=/quit; resume=\${id:+resume $id}; fi
+  tmux send-keys -t "$pane" C-c; sleep 0.5
+  tmux send-keys -t "$pane" -l "$quit"; sleep 0.5
+  tmux send-keys -t "$pane" Enter
+  n=0
+  while [ -d "/proc/$pid" ]; do
+    n=$((n + 1))
+    [ $n -lt 30 ] || { printf '%s\\tdid not exit, not restarted\\n' "$name"; return 0; }
+    sleep 0.5
+  done
+  sleep 0.5
+  tmux send-keys -t "$pane" -l "(. ~/.accounts/$agent.env 2>/dev/null; $agent \${resume:-})"
+  tmux send-keys -t "$pane" Enter
+  printf '%s\\trestarted\\n' "$name"
+}
+if [ "$agent" = claude ]; then
+  for f in "$HOME"/.claude/sessions/*.json; do
+    set -- $(jq -r '"\\(.pid) \\(.sessionId) \\(.tmux // "")"' "$f" 2>/dev/null)
+    [ -n "\${3:-}" ] || continue
+    case "$(readlink "/proc/$1/exe" 2>/dev/null)" in */claude) ;; *) continue ;; esac
+    restart "\${3##*.}" "$1" "$2" "" &
+  done
+else
+  for p in /proc/[0-9]*; do
+    case "$(readlink "$p/exe" 2>/dev/null)" in */codex) ;; *) continue ;; esac
+    pane=$(tr '\\0' '\\n' < "$p/environ" 2>/dev/null | sed -n 's/^TMUX_PANE=//p')
+    [ -n "$pane" ] || continue
+    rollout=$(for f in "$p"/fd/*; do readlink "$f"; done 2>/dev/null | grep 'rollout-.*\\.jsonl$' | head -n 1)
+    id=$(printf %s "$rollout" | sed -n 's/.*\\([0-9a-f]\\{8\\}\\(-[0-9a-f]\\{4\\}\\)\\{3\\}-[0-9a-f]\\{12\\}\\)\\.jsonl$/\\1/p')
+    restart "$pane" "\${p#/proc/}" "$id" "$rollout" &
+  done
+fi
+wait
+`;
+
+export function restartAgentsCommand(agent: AccountAgent): string[] {
+  return ['sh', '-c', RESTART_SCRIPT, 'sh', agent];
+}
+
+export function parseRestarts(stdout: string): { session: string; result: string }[] {
+  return stdout
+    .split('\n')
+    .filter(line => line.includes('\t'))
+    .map(line => {
+      const [session, result] = line.split('\t');
+      return { session, result };
+    });
+}
